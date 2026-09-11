@@ -1,0 +1,6 @@
+/target/
+/.pup/
+/.tools/
+/.test-artifacts/
+__pycache__/
+*.pyc
