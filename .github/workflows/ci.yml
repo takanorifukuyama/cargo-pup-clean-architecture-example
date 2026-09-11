@@ -26,12 +26,12 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Formatting
         run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy including architecture macros
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Behavior and CLI tests
         run: cargo test --locked --all-targets
-      - name: Architecture harness unit tests
-        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Architecture harness unit tests (no cargo-pup required)
+        run: cargo test --locked --features architecture-tests --test architecture support::tests
 
   architecture:
     name: Architecture contracts
@@ -48,8 +48,24 @@ jobs:
           key: cargo-pup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pup-toolchain.toml', 'scripts/setup_pup.py') }}
       - name: Install pinned nightly and cargo-pup
         run: python3 scripts/setup_pup.py
-      - name: Check architecture and prove violations are detected
-        run: python3 scripts/check_architecture.py
+      - name: Run Rust architecture rules and violation tests
+        run: cargo test --locked --features architecture-tests --test architecture -- --nocapture
+      - name: Architecture summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Rust architecture tests'
+            echo
+            echo 'Violating fixtures must compile normally, then fail with the expected named cargo-pup diagnostic.'
+            echo 'KNOWN GAP is characterization, not protection.'
+            echo
+            echo '| Test | Result |'
+            echo '| --- | --- |'
+            if [ -d .test-artifacts/architecture ]; then
+              find .test-artifacts/architecture -name '*.result.md' -type f -exec cat {} + | sort
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
