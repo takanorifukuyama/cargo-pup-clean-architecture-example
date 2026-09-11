@@ -151,9 +151,9 @@ fn architecture_contracts_and_known_limitations() -> io::Result<()> {
             "domain_no_outer_imports",
         ),
         (
-            "repository without the application's port",
-            include_str!("fixtures/missing_repository_trait.rs"),
-            "repository_adapters_implement_port",
+            "non-public repository adapter",
+            include_str!("fixtures/non_public_repository.rs"),
+            "repository_adapters_public",
         ),
     ];
 
@@ -171,16 +171,28 @@ fn architecture_contracts_and_known_limitations() -> io::Result<()> {
         println!("PASS: {name} rejected by {rule}");
     }
 
-    // Characterization test, NOT an allowed design pattern. When upstream gains
-    // type-dependency analysis this should fail, prompting a docs/rules review.
-    let blind_spot = ScratchProject::fixture(include_str!("fixtures/fully_qualified_bypass.rs"))?;
-    blind_spot.assert_compiles();
-    let output = blind_spot.lint();
-    assert!(
-        output.status.success(),
-        "known blind spot changed, or tooling failed; inspect output and update the documentation:\n{}",
-        output_text(&output)
-    );
-    println!("KNOWN LIMITATION: fully qualified dependency bypasses import restrictions");
+    // Characterization tests, NOT allowed design patterns. If upstream starts
+    // rejecting either case, inspect the new diagnostics and update the docs.
+    let known_limitations = [
+        (
+            "fully qualified dependency bypasses import restrictions",
+            include_str!("fixtures/fully_qualified_bypass.rs"),
+        ),
+        (
+            "StructRule::ImplementsTrait does not enforce trait implementation",
+            include_str!("fixtures/missing_repository_trait.rs"),
+        ),
+    ];
+    for (name, source) in known_limitations {
+        let project = ScratchProject::fixture(source)?;
+        project.assert_compiles();
+        let output = project.lint();
+        assert!(
+            output.status.success(),
+            "known limitation changed, or tooling failed ({name}); inspect output and update docs:\n{}",
+            output_text(&output)
+        );
+        println!("KNOWN LIMITATION: {name}");
+    }
     Ok(())
 }

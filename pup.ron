@@ -57,7 +57,17 @@
             ],
         )),
         Struct((
-            name: "repository_adapters_implement_port",
+            // A project convention: the separate CLI binary constructs adapters.
+            name: "repository_adapters_public",
+            matches: Name(".*TaskRepository$"),
+            rules: [MustBePublic(Error)],
+        )),
+        Struct((
+            // OBSERVATION ONLY, NOT ENFORCEMENT in 0.1.8:
+            // StructRule::ImplementsTrait is defined but ignored by the checker.
+            // The missing_repository_trait fixture characterizes this gap.
+            // Actual adapters are constrained by Rust's CreateTask<R: TaskRepository>.
+            name: "probe_repository_trait_requirement",
             matches: Name(".*TaskRepository$"),
             rules: [
                 ImplementsTrait("^clean_architecture::application::TaskRepository$", Error),

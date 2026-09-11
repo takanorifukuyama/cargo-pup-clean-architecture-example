@@ -36,5 +36,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned cargo-pup and its compiler
         run: bash scripts/install-cargo-pup.sh
-      - name: Check real application, six violations, and a known blind spot
+      - name: Check real application, six violations, and two known limitations
         run: cargo architecture-test

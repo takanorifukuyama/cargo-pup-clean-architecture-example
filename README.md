@@ -4,6 +4,8 @@ RustのClean Architectureを、[cargo-pup](https://github.com/DataDog/cargo-pup)
 
 **正常なアプリだけでなく、コンパイルは通る設計違反と、検査をすり抜ける既知のケースも自動テストする。** 「CIが緑だから設計が完全に守られている」と誤解しないための実験用レポジトリです。
 
+> 実機検証で、`StructRule::ImplementsTrait`がAPIには存在するものの、0.1.8では検査を実行しないことも確認しました。traitの必須実装をcargo-pupが保証するサンプルではありません。[調査記録](docs/findings.md)を参照してください。
+
 ## まず動かす
 
 Rust（rustup）があれば、通常のアプリとテストはstableで実行できます。アプリ本体・テストコードともに外部crateへの依存はありません。
@@ -46,7 +48,7 @@ cargo architecture-test
 cargo test --test architecture -- --ignored --nocapture
 ```
 
-通常の`cargo test`ではnightly依存のこのテストを明示的に`ignored`にしています。**通常のテストが通っただけでは、設計検査を実行したことにはなりません。** 専用コマンドとCIの別ジョブで必ず実行します。専用コマンドはツール未導入・ビルドエラー・設定エラーを成功扱いしません。
+通常の`cargo test`ではnightly依存のこのテストを明示的に`ignored`にしています。**通常のテストが通っただけでは、設計検査を実行したことにはなりません。** 専用コマンドとCIの別ジョブで実行します。専用コマンドはツール未導入・ビルドエラー・設定エラーを成功扱いしません。
 
 ## Clean Architectureの構成
 
@@ -69,11 +71,11 @@ main.rs: 具象実装を選択し、各層を接続するcomposition root
 | `src/presentation.rs` | 入出力DTOとcontroller。ユースケースを呼び出す |
 | `src/main.rs` | 具体的なRepositoryを注入してCLIを動かす |
 
-portを内側に置き、外側のadapterに実装させるのが依存性逆転です。テストでは別のRepository実装を渡して、保存失敗も再現します。
+portを内側に置き、外側のadapterに実装させるのが依存性逆転です。`CreateTask<R: TaskRepository>`の型制約により、**実際に注入されるadapterのtrait実装はRustコンパイラが要求**します。テストでは別のRepository実装を渡して、保存失敗も再現します。
 
 今回は**意図的に1 crate内のモジュールで構成**しています。Rustとして合法な層間参照をcargo-pupが検出する様子を見るためです。実際の大きなプロジェクトではcrate分割・可視性・Cargo依存関係の検査も併用する設計が候補になります。このサンプルにCargo依存グラフの検査は実装していません。
 
-## 守るルール
+## 守るルールと観測用ルール
 
 ルールは[`pup.ron`](pup.ron)に一元化しています。アプリと全fixtureが同じ設定を使います。RONはcargo-pupの設定形式です。
 
@@ -83,7 +85,11 @@ portを内側に置き、外側のadapterに実装させるのが依存性逆転
 | `application_no_adapters` | applicationからinfrastructure / presentationなどのimportを禁止 |
 | `presentation_no_infrastructure` | presentationからinfrastructure / sqlxのimportを禁止 |
 | `infrastructure_no_presentation` | infrastructureからpresentationのimportを禁止 |
-| `repository_adapters_implement_port` | 名前が`TaskRepository`で終わるstructに、applicationの`TaskRepository`実装を要求 |
+| `repository_adapters_public` | 名前が`TaskRepository`で終わるstructは`pub`とする、このサンプルの公開範囲ルール |
+
+公開範囲のルールはClean Architecture一般の必須条件ではなく、別のbinary crateであるCLIからadapterを構築するこのサンプルの規約です。5つのルールについて、違反の名前付き診断をテストします。
+
+さらに、`probe_repository_trait_requirement`を**観測専用**で置いています。`StructRule::ImplementsTrait`の未実装を再現するための設定であり、現行版で設計を強制するルールには数えません。ツールの更新で挙動が変わったら、テストと説明を見直します。
 
 importルールには、将来のうっかりした導入に備えて一部フレームワーク名やdomainからの直接I/Oも禁止パターンとして含めています。ただし、**任意の外部依存を網羅する許可リストではありません**。fixtureで確認する中心は上記の層間参照です。
 
@@ -117,10 +123,13 @@ Module((
 | presentation → infrastructure | 成功 | 名前付きルールで失敗 |
 | infrastructure → presentation | 成功 | 名前付きルールで失敗 |
 | domainの子モジュール → presentation | 成功 | 名前付きルールで失敗 |
-| portを実装していないRepository | 成功 | 名前付きルールで失敗 |
+| `pub`ではないRepository | 成功 | 名前付きルールで失敗 |
 | 完全修飾パスでdomain → infrastructure | 成功 | **成功してしまう（既知の限界）** |
+| portを実装していない、未使用のRepository | 成功 | **成功してしまう（未実装ルール）** |
 
-各ケースを独立した一時crateへコピーし、**先に同じnightlyで通常の`cargo check`が通ることを確認**します。その後、違反例ではcargo-pupの非ゼロ終了だけでなく、期待したルール名の診断まで確認します。構文エラーやツールのクラッシュを「検出できた」と数えません。最後のケース以外の違反を見逃した場合は、テスト全体が失敗します。
+各ケースを独立した一時crateへコピーし、**先に同じnightlyで通常の`cargo check`が通ることを確認**します。その後、6つの違反例ではcargo-pupの非ゼロ終了だけでなく、期待したルール名の診断まで確認します。構文エラーやツールのクラッシュを「検出できた」と数えません。
+
+末尾の2件は「設計上正しい」というテストではなく、ツールの現状を固定するcharacterization testです。この2件以外の違反を見逃したら、テスト全体が失敗します。
 
 一時ディレクトリを使うのでソースを自動改変せず、Cargoの親プロセスとビルドロックも共有しません。失敗時には調査用の一時ディレクトリの場所を表示して残します。専用テストのログに表示される6件のlintエラーは**期待する出力**で、最終的なRustテストの結果が成功かどうかを見てください。
 
@@ -144,9 +153,11 @@ pub fn forbidden_dependency() -> crate::infrastructure::Database {
 }
 ```
 
-これを[`fully_qualified_bypass.rs`](tests/fixtures/fully_qualified_bypass.rs)に残しています。許可された設計例ではなく、ツールの限界を可視化するcharacterization testです。upstream更新によって検出されるようになったら、テストの期待値と説明を見直します。
+これを[`fully_qualified_bypass.rs`](tests/fixtures/fully_qualified_bypass.rs)に残しています。
 
-また、aliasやre-export、名前の変え方による抜け道の網羅検査はしていません。Repositoryのルールも命名規約に一致するstructだけが対象です。`cargo pup --lib`は選択したライブラリ・ビルド条件を対象とし、すべてのfeature / target / `cfg(test)`の組み合わせを検証するものではありません。`main.rs`は外側を接続するため、層ルールの対象にしていません。
+**`StructRule::ImplementsTrait`も0.1.8では未処理です。** traitで対象structを選ぶ`StructMatch::ImplementsTrait`とは別の機能です。必須実装はRustの型制約で保証し、cargo-pupに任せきらないでください。[再現fixture](tests/fixtures/missing_repository_trait.rs)と[調査記録](docs/findings.md)があります。
+
+aliasやre-export、名前の変え方による抜け道の網羅検査はしていません。Repositoryのルールも命名規約に一致するstructだけが対象です。`cargo pup --lib`は選択したライブラリ・ビルド条件を対象とし、すべてのfeature / target / `cfg(test)`の組み合わせを検証するものではありません。`main.rs`は外側を接続するため、層ルールの対象にしていません。
 
 cargo-pup 0.1.8の`ModuleRule::And / Or / Not`には検査をスキップする実装があるため、ここでは使用していません。複数の独立ルールを並べています。matcherの`AndMatches`などとは別の話です。
 
@@ -156,8 +167,8 @@ cargo-pup 0.1.8の`ModuleRule::And / Or / Not`には検査をスキップする�
 
 `.github/workflows/ci.yml`は次の2ジョブを独立して実行します。
 
-- **Rust tests and lint**: stableでfmt / clippy / 通常テスト / CLI起動。
-- **cargo-pup contract tests**: 指定nightlyとcargo-pupを導入し、上記8ケースを実行。
+- **Rust tests and lint**: stableでfmt / clippy / 通常テスト10件 / CLI起動。
+- **cargo-pup contract tests**: 指定nightlyとcargo-pupを導入し、上記9ケースを実行。
 
 バージョンを変更する際は、`scripts/install-cargo-pup.sh`、`tests/architecture.rs`、このREADMEの組を更新し、既知の限界を含めて再確認してください。
 
@@ -167,7 +178,7 @@ cargo-pup 0.1.8の`ModuleRule::And / Or / Not`には検査をスキップする�
 
 - [READMEと導入手順](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/README.md)
 - [Module lint実装](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_impl/src/lints/module_lint/lint.rs)
-- [Struct ruleの定義](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_config/src/struct_lint/types.rs)
+- [Struct rule定義](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_config/src/struct_lint/types.rs)と[検査実装](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_impl/src/lints/struct_lint/lint.rs)
 
 ## License
 
