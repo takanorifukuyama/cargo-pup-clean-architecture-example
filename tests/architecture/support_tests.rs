@@ -1,26 +1,54 @@
 use super::*;
 
-const DIAGNOSTIC: &str = "error: domain_inward_only: Use of module 'crate::infrastructure::Repo' is denied";
+const DIAGNOSTIC: &str =
+    "error: domain_inward_only: Use of module 'crate::infrastructure::Repo' is denied";
 
 #[test]
 fn accepts_only_a_named_error_with_positive_exit() {
-    assert!(verify(Expectation::Denied, "domain_inward_only", Some(101), DIAGNOSTIC).is_ok());
+    assert!(verify(
+        Expectation::Denied,
+        "domain_inward_only",
+        Some(101),
+        DIAGNOSTIC
+    )
+    .is_ok());
 }
 
 #[test]
 fn silent_success_is_not_a_detected_violation() {
-    assert!(verify(Expectation::Denied, "domain_inward_only", Some(0), DIAGNOSTIC).is_err());
+    assert!(verify(
+        Expectation::Denied,
+        "domain_inward_only",
+        Some(0),
+        DIAGNOSTIC
+    )
+    .is_err());
 }
 
 #[test]
 fn another_rule_cannot_satisfy_the_contract() {
-    assert!(verify(Expectation::Denied, "application_inward_only", Some(101), DIAGNOSTIC).is_err());
+    assert!(verify(
+        Expectation::Denied,
+        "application_inward_only",
+        Some(101),
+        DIAGNOSTIC
+    )
+    .is_err());
 }
 
 #[test]
 fn configuration_and_compilation_errors_are_not_detection() {
-    for message in ["error: could not parse pup.ron", "error[E0432]: unresolved import"] {
-        assert!(verify(Expectation::Denied, "domain_inward_only", Some(101), message).is_err());
+    for message in [
+        "error: could not parse pup.ron",
+        "error[E0432]: unresolved import",
+    ] {
+        assert!(verify(
+            Expectation::Denied,
+            "domain_inward_only",
+            Some(101),
+            message
+        )
+        .is_err());
     }
 }
 
@@ -46,13 +74,25 @@ fn valid_code_must_succeed() {
 #[test]
 fn known_gap_is_characterization_not_protection() {
     assert!(verify(Expectation::KnownGap, "rule", Some(0), "").is_ok());
-    assert!(verify(Expectation::KnownGap, "domain_inward_only", Some(101), DIAGNOSTIC).is_err());
+    assert!(verify(
+        Expectation::KnownGap,
+        "domain_inward_only",
+        Some(101),
+        DIAGNOSTIC
+    )
+    .is_err());
 }
 
 #[test]
 fn normalizes_macro_paths_and_preserves_boundary_patterns() {
-    assert_eq!(normalized_path("clean_architecture :: domain").unwrap(), "clean_architecture::domain");
-    assert_eq!(import_pattern("crate :: infrastructure").unwrap(), "(^|::)infrastructure(::|$)");
+    assert_eq!(
+        normalized_path("clean_architecture :: domain").unwrap(),
+        "clean_architecture::domain"
+    );
+    assert_eq!(
+        import_pattern("crate :: infrastructure").unwrap(),
+        "(^|::)infrastructure(::|$)"
+    );
     assert_eq!(import_pattern("std::fs").unwrap(), "^std::fs(::|$)");
     assert_eq!(import_pattern("sqlx").unwrap(), "^sqlx(::|$)");
 }
@@ -66,13 +106,21 @@ fn rejects_unsupported_paths_instead_of_injecting_regex_or_ron() {
 
 #[test]
 fn generates_error_severity_and_child_module_matching() {
-    let rule = Rule { name: "domain_inward_only", module: "clean_architecture::domain", deny_imports: &["crate::infrastructure", "std::fs"] };
+    let rule = Rule {
+        name: "domain_inward_only",
+        module: "clean_architecture::domain",
+        deny_imports: &["crate::infrastructure", "std::fs"],
+    };
     let config = configuration(&rule).unwrap();
     assert!(config.contains("severity: Error"));
     assert!(config.contains("^clean_architecture::domain(::|$)"));
     assert!(config.contains("(^|::)infrastructure(::|$)"));
     assert!(config.contains("^std::fs(::|$)"));
-    assert!(configuration(&Rule { deny_imports: &[], ..rule }).is_err());
+    assert!(configuration(&Rule {
+        deny_imports: &[],
+        ..rule
+    })
+    .is_err());
 }
 
 #[test]
@@ -87,7 +135,10 @@ fn pins_are_required_unique_and_quoted() {
 
 #[test]
 fn strips_terminal_colors() {
-    assert_eq!(strip_ansi("\u{1b}[1;32mcargo-pup\u{1b}[0m version 0.1.8\n"), "cargo-pup version 0.1.8\n");
+    assert_eq!(
+        strip_ansi("\u{1b}[1;32mcargo-pup\u{1b}[0m version 0.1.8\n"),
+        "cargo-pup version 0.1.8\n"
+    );
 }
 
 #[test]
@@ -105,8 +156,16 @@ fn temporary_projects_are_distinct_and_cleaned_up() {
 fn missing_and_duplicate_rule_names_are_errors() {
     assert!(find_rule(&[], "missing").is_err());
     let rules = [
-        Rule { name: "same", module: "a", deny_imports: &["b"] },
-        Rule { name: "same", module: "c", deny_imports: &["d"] },
+        Rule {
+            name: "same",
+            module: "a",
+            deny_imports: &["b"],
+        },
+        Rule {
+            name: "same",
+            module: "c",
+            deny_imports: &["d"],
+        },
     ];
     assert!(find_rule(&rules, "same").is_err());
 }
