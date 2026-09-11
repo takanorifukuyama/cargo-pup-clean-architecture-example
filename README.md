@@ -1,122 +1,133 @@
 # cargo-pup-clean-architecture-example
 
-RustのClean Architectureを **cargo-pupで検査し、その検査が本当に違反を検出するかもGitHub Actionsで試す** サンプルです。
+RustのClean Architectureを、**Rustマクロで宣言した設計ルール + `cargo test` + cargo-pup** で検証するサンプルです。
 
-> これは設計の完全性を保証するツールではありません。特に `RestrictImports` は完全な依存グラフ検査ではなく、`use` の制約です。このレポでは、検出できる違反と既知の見逃しを両方実行して確認します。
+## テストはここ
 
-## サンプルの構成
+**ルールの本体は [`tests/architecture.rs`](tests/architecture.rs) です。** PythonやRONではなく、Rustのテストとして読み書きします。
 
-依存方向を読み取りやすくするため、タスクの作成・取得だけを扱う、外部crate依存なしの小さなCLIにしています。HTTPサーバーや実DBの起動は不要です。
-
-```text
-src/main.rs                  構成の組み立て（composition root）
-  ├── presentation           Controller / 表示用データ
-  │     └── application      タスク作成・取得のユースケース
-  │           └── domain    Task / 検証ルール / TaskRepository trait
-  └── infrastructure
-        └── domain          InMemoryTaskRepositoryがtraitを実装
+```rust
+architecture_rules! {
+    domain_inward_only {
+        module: clean_architecture::domain,
+        deny_imports: [
+            crate::application,
+            crate::infrastructure,
+            crate::presentation,
+            axum,
+            sqlx,
+            tokio,
+            reqwest,
+            std::fs,
+            std::net,
+            std::process,
+        ],
+    }
+}
 ```
 
-| 層 | 役割 | このサンプルでの依存方針 |
-| --- | --- | --- |
-| `domain` | エンティティ、業務上の検証、永続化のport | 他の3層を知らない |
-| `application` | ユースケース | domainのtraitを通して永続化する |
-| `presentation` | 入出力の変換 | applicationを呼び、具体的なストレージを知らない |
-| `infrastructure` | 永続化のadapter | domainのtraitを実装し、application / presentationを知らない |
-| `main.rs` | 具体実装の注入 | 各層を組み立てる例外的な場所 |
+`domain_inward_only` という通常の `#[test]` 関数が生成されます。現在のソースを一時コピーしてこのルールを検査し、禁止importがあればテストが失敗します。層のルートだけでなく子モジュールも対象です。
 
-`TaskService<R: TaskRepository>` に保存先を注入します。テストでは利用不能なRepositoryに差し替え、ユースケースを変更せずにエラーを扱えることを確認します。この例ではportをdomainに置いています。すべてのプロジェクトにこの配置を要求するものではありません。
+**このマクロは、このサンプルで実装した薄い `macro_rules!` ラッパーです。cargo-pupの標準マクロではありません。** マクロが依存関係を解析するのではなく、実行時に設定を生成してcargo-pupを呼び出します。設定は一時ディレクトリだけに生成するため、手書きの `pup.ron` とRustルールを二重管理しません。
 
-**単一crate・複数モジュールなのは意図的です。** Rustのコンパイル自体は通る設計違反を作り、cargo-pupとの差を観察できます。実製品の強い境界には、crate分割、依存許可リスト、可視性制御も併用してください。
+## 実行する
 
-## 動かす
-
-通常の開発・テストはstable Rustだけで実行できます。
-
-```sh
-cargo run --locked -- "Write architecture tests"
-# 1: Write architecture tests
-
-cargo test --locked --all-targets
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-```
-
-毎回メモリ内のRepositoryを作るデモなので、プロセスを終了するとタスクは消えます。
-
-## cargo-pupを実行する
-
-前提は `rustup` と **Python 3.11以上**。CIはLinuxで検証します。
+初回は `rustup` とPython 3.11以上で、固定版の外部ツールをインストールします。Pythonが必要なのはこのセットアップだけで、テスト本体・ケース定義・判定ロジックはRustです。
 
 ```sh
 python3 scripts/setup_pup.py
-python3 scripts/check_architecture.py
+
+# 設計ルール・違反検出・既知の限界・判定ロジックを実行
+cargo test --locked --features architecture-tests --test architecture
+
+# 通常のRustテストフィルターで1件だけ実行
+cargo test --locked --features architecture-tests --test architecture domain_inward_only -- --exact
+cargo test --locked --features architecture-tests --test architecture violations::domain_to_infrastructure -- --exact
+
+# テスト名の一覧
+cargo test --locked --features architecture-tests --test architecture -- --list
 ```
 
-ツールの組み合わせは [`pup-toolchain.toml`](pup-toolchain.toml) の一箇所で固定しています。
-
-- `cargo_pup = 0.1.8`
-- `nightly-2026-01-22` + `rust-src` / `rustc-dev` / `llvm-tools-preview`
-
-アプリの通常ビルドをnightlyに変更する必要はありません。cargo-pupのための別のコンパイルでnightlyを使います。CLIはこのレポの `.tools/cargo-pup` にインストールします。
-
-設計ルールだけを対話的に確認する場合：
+普段の業務テストはstableだけで実行できます。
 
 ```sh
-export PATH="$PWD/.tools/cargo-pup/bin:$PATH"
-# 設定変更後も古い解析を再利用しないよう、解析用のキャッシュを消す。
-rm -rf .pup
-cargo pup check --locked --all-targets
-cargo pup print-modules --locked --lib
+cargo run --locked -- "Write architecture tests"
+cargo test --locked --all-targets
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+
+# ハーネスの単体テストだけならcargo-pupもPythonも不要
+cargo test --locked --features architecture-tests --test architecture support::tests
 ```
 
-## 定義した設計ルール
+`architecture-tests` は重い外部検査を明示的に有効化するfeatureです。通常の `cargo test` には設計テストが含まれません。**GitHub Actionsの `Architecture contracts` はこのfeatureを必ず指定します。** feature有効時にツール未導入・バージョン不一致なら明確に失敗し、黙ってスキップしません。
 
-設定の本体は [`pup.ron`](pup.ron) です。すべて `severity: Error` にしています。
+## 違反を本当に止められるかも、Rustでテストする
 
-| ルール名 | 禁止するimport |
+[`tests/architecture/violations.rs`](tests/architecture/violations.rs) に違反例を置いています。
+
+```rust
+architecture_violation! {
+    domain_to_infrastructure {
+        rule: domain_inward_only,
+        in_file: "src/domain.rs",
+        add: { pub use crate::infrastructure::InMemoryTaskRepository; }
+    }
+}
+```
+
+これも通常の `#[test]` になります。`add` 内のRustトークンは `stringify!` でテスト用のコードに変換し、新しい一時コピーだけに追加します。元の作業ツリーは変更しません。
+
+1. 同じ固定nightlyで通常の `cargo check --locked --all-targets` が成功することを確認。
+2. **同じRustルール**から設定を生成してcargo-pupを実行。
+3. 違反例は非ゼロの終了コード、期待したルール名、import禁止のエラー診断を確認。
+
+「想定した設計違反で落ちること」がテスト成功です。構文エラー、設定エラー、警告のみ、シグナル終了やパニックを検出成功にはしません。毎回新しい解析用ディレクトリを使い、ルール変更が古い `.pup` キャッシュに隠れないようにしています。通常コンパイルにも一時コピー専用のtargetを指定し、外側の `cargo test` のロックと競合させません。
+
+アーキテクチャの実行ケースは **16件（実コードへの4ルール + 違反11件 + 既知の見逃し1件）**。これに、判定・パターン生成・固定バージョン読み取り・一時ディレクトリなどのRust単体テスト15件が加わります。並列実行してもfixtureとログをケースごとに分離します。
+
+## サンプルの構成
+
+アプリもテストハーネスも外部crate依存なしです。HTTPサーバーや実DBは不要で、タスク作成・取得だけの小さなCLIです。
+
+```text
+src/main.rs                  composition root / 実装の注入
+  ├── presentation           Controller / 表示用データ
+  │     └── application      タスク作成・取得のユースケース
+  │           └── domain    Task / 検証 / TaskRepository trait
+  └── infrastructure
+        └── domain          InMemoryTaskRepositoryがtraitを実装
+
+tests/architecture.rs                  マクロによる4つのルール
+  └── architecture/violations.rs        違反11件 + 既知の見逃し
+      architecture/support.rs          マクロ・cargo-pup実行ハーネス
+      architecture/support_tests.rs    ハーネスの単体テスト
+
+tests/behavior.rs                      通常の業務・CLIテスト9件
+```
+
+`TaskService<R: TaskRepository>` に保存先を注入します。portをdomainに置くのはこの例の方針であり、全プロジェクトへの要求ではありません。`infrastructure` から `application` を禁止しているのも、この配置に基づくサンプル固有の方針です。
+
+| ルール | 禁止するimport |
 | --- | --- |
-| `domain_inward_only` | application / infrastructure / presentation、指定した外部I/O系crate、`std::fs` / `net` / `process` |
+| `domain_inward_only` | 他の3層、指定したI/O系crate、`std::fs` / `net` / `process` |
 | `application_inward_only` | infrastructure / presentation、指定したHTTP・DB系crate |
 | `presentation_no_direct_storage` | infrastructure、sqlx |
 | `infrastructure_uses_domain_ports` | application / presentation |
 
-モジュール名は `^clean_architecture::domain(::|$)` のように、層のルートと子モジュールの両方に一致させています。crateを改名したらこの指定も更新してください。標準ライブラリ等を全面禁止する設定ではなく、記載したパターンだけを禁止する例です。
+単一crateなのは意図的です。Rustのコンパイル自体は通る設計違反を作り、cargo-pupとの差を観察します。実製品の強い境界にはcrate分割、依存許可リスト、可視性制御も併用してください。メモリ内Repositoryなので、CLIを終了するとタスクは消えます。
 
-例えばdomainに次を足す変更は、Rustとしてはコンパイル可能ですが、cargo-pupでは拒否する想定です。
+## マクロで改善すること・しないこと
 
-```rust
-pub use crate::infrastructure::InMemoryTaskRepository;
-```
+改善するのは **ルールの書きやすさ、テストの見つけやすさ、`cargo test` / IDEとの統合** です。コンパイル時の型チェックだけで設計を保証する仕組みではありません。
 
-## 「検査が効いていること」もテストする
+- `module` と `deny_imports` は単純なASCII Rustパスを受け取り、正規表現に変換します。ジェネリック、raw identifier、Unicode識別子には未対応で、黙って解釈せずエラーにします。
+- `crate::infrastructure` は従来と同じ `(^|::)infrastructure(::|$)` に変換します。相対importも対象にしますが、解決済みの型・モジュールIDを追うものではなく、同名のパス区間への過検出や再export経由の見逃しはあり得ます。
+- axum / sqlxなどは設定例です。この依存なしサンプルでは、実際の外部crateをリンクするケースまでは検証していません。
 
-[`scripts/check_architecture.py`](scripts/check_architecture.py) は、各ケースで現在のコードと設定を新しい一時ディレクトリにコピーします。作業ツリーは変更しません。
+### 既知の見逃しは残る
 
-1. 通常のnightlyコンパイラで `cargo check --locked --all-targets` が成功することを確認する。
-2. 同じコードに `cargo-pup` を実行する。
-3. 違反例では **終了コードが非ゼロで、期待したルール名とimport禁止の診断が出ること** を確認する。
-
-単なるコンパイルエラー、設定ファイルの構文エラー、ツール未導入、警告だけで終了コード0の場合を「検出できた」と扱いません。毎回新しい `.pup` を作るため、設定変更がキャッシュに隠れることも避けます。
-
-**13ケース**を実行します。正常例1件、禁止依存の検出11件、既知の見逃しの確認1件です。各層の禁止方向に加え、ネストしたモジュール、相対パス＋別名import、domainからファイルI/Oへのimportも含めています。外部crate名の禁止パターンは設定例であり、この依存なしサンプルでは実際のaxum/sqlx等をリンクして検証していません。
-
-特定のケースだけ試すには：
-
-```sh
-python3 scripts/check_architecture.py --case domain_to_infrastructure
-python3 scripts/check_architecture.py --case fully_qualified_path_known_gap
-```
-
-診断ログと一覧は `.test-artifacts/architecture/` に保存します。判定ロジック自体の単体テストはRustなしでも実行できます。
-
-```sh
-python3 -m unittest discover -s scripts/tests -v
-```
-
-### 既知の限界を隠さない
-
-`RestrictImports` は、次のような **`use` を書かない完全修飾パス参照を禁止するものではありません**。
+`RestrictImports` は完全な依存グラフ検査ではありません。例えば、`use` を使わない直接参照は検出されません。
 
 ```rust
 pub fn known_gap() -> crate::infrastructure::InMemoryTaskRepository {
@@ -124,29 +135,28 @@ pub fn known_gap() -> crate::infrastructure::InMemoryTaskRepository {
 }
 ```
 
-`fully_qualified_path_known_gap` は、この違反が検出されずに通る挙動を記録するテストです。CIの表示も `KNOWN GAP confirmed (not protection)` とし、「この依存を許してよい」という意味にしません。将来cargo-pupの改善で検出されるようになったら、テストと説明を更新してください。
+`fully_qualified_path_known_gap` でこの挙動を明示的に記録し、結果も **`KNOWN GAP confirmed (not protection)`** と表示します。「許してよい依存」という意味ではありません。改善で検出されるようになれば、このテストを変更します。マクロ化しても解析精度やnightlyへの依存は変わりません。
 
-ほかにも再exportを経由した参照、マクロ、解析対象にしていないfeature / targetなどは別途検証が必要です。このCIはUbuntu上のデフォルトfeatureで `--all-targets` を検査します。機能仕様の正しさ、セキュリティ、実DB接続、デプロイ・起動の成功までは保証しません。また、ルールとテストを同時に弱める変更には、CODEOWNERS等を含むレビュー運用が必要です。
+feature / targetの網羅、再exportやマクロ展開を経由する参照などは別途検証が必要です。今回の解析はUbuntuのデフォルトfeatureで `--all-targets` を対象とし、機能仕様、セキュリティ、実DB、デプロイ・起動の成功までは保証しません。ルールとテストを同時に弱める変更にはレビューが必要です。
 
-## GitHub Actions
+## CIとツール固定
 
-[`CI`](.github/workflows/ci.yml) はPR、mainへのpush、手動実行に対応しています。
+[`pup-toolchain.toml`](pup-toolchain.toml) の1箇所で `cargo_pup = 0.1.8` / `nightly-2026-01-22` を固定しています。アプリとテストランナーはstableで動き、cargo-pupによる別コンパイルだけでnightlyを使います。
 
-| ジョブ | 検査 |
+| GitHub Actionsのジョブ | 検査 |
 | --- | --- |
-| **Rust quality** | rustfmt、Clippy、業務・CLIのテスト、検査スクリプトの単体テスト |
-| **Architecture contracts** | 固定nightly + cargo-pup、正常例・違反例・既知の限界の検証 |
+| **Rust quality** | rustfmt、全featureのClippy、業務テスト、Rustハーネス単体テスト |
+| **Architecture contracts** | 固定cargo-pup導入 + `cargo test --features architecture-tests --test architecture` |
 
-違反例は **期待した違反を検出できたときにCIが緑になる** 仕組みです。一方、実コードに禁止importが入れば正常例の検査でCIが赤になります。
+PR・mainへのpush・手動実行に対応しています。インストール済みツールだけをキャッシュし、解析結果は再利用しません。各外部コマンドのタイムアウトとジョブのタイムアウトを設定しています。
 
-cargo-pupのインストール済みバイナリはキャッシュしますが、解析結果の `.pup` は再利用しません。実行の重複はキャンセルし、タイムアウトを設定。ActionsはコミットSHAで固定し、GitHubトークンは `contents: read` のみです。診断ログはActions Artifactに7日間保存し、ケース一覧をJob Summaryに出します。
+診断ログ、実際に生成したRON、ケースごとの結果を `.test-artifacts/architecture/` に出力します。Actions Artifactで7日間保存し、Job Summaryにも結果を表示します。ActionsはコミットSHA固定、トークンは `contents: read` のみです。
 
-**CIの失敗をマージ禁止条件にする設定は別です。** GitHubのSettings → Rules → Rulesets（またはBranchesの保護設定）でmainを対象に、`Rust quality` と `Architecture contracts` を必須ステータスチェックに指定してください。このPRからリポジトリの保護設定は変更しません。手動実行はワークフローがデフォルトブランチに入ってから利用できます。
+CI失敗をマージ禁止にするには、mainのRulesetで `Rust quality` と `Architecture contracts` を必須ステータスチェックにしてください。この変更ではブランチ保護設定を変更しません。
 
 ## 参考
 
 - [DataDog / cargo-pup](https://github.com/DataDog/cargo-pup)
-- [公式の導入手順・Rustによるルール定義例](https://github.com/DataDog/cargo-pup#readme)
-- [RestrictImportsの実装を確認したupstreamソース](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_impl/src/lints/module_lint/lint.rs)
+- [RestrictImportsのupstream実装](https://github.com/DataDog/cargo-pup/blob/a2c06497096123d4d37f622ddadb934831c60e92/cargo_pup_lint_impl/src/lints/module_lint/lint.rs)
 
-このレポはツールの評価・学習用です。ルールを増やす前に、小さな違反例を追加して「何を保証できるか」を確認することを推奨します。
+マクロはサンプルローカルの実装です。crateとして公開したものではありません。

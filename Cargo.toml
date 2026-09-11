@@ -13,4 +13,13 @@ name = "clean_architecture"
 name = "task-demo"
 path = "src/main.rs"
 
-# Deliberately dependency-free: the example demonstrates boundaries, not a framework.
+[features]
+# Explicit opt-in: ordinary behavior tests do not require the external lint tool.
+architecture-tests = []
+
+[[test]]
+name = "architecture"
+path = "tests/architecture.rs"
+required-features = ["architecture-tests"]
+
+# Both the application and the Rust test harness are dependency-free.
