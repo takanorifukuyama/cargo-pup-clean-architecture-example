@@ -1,0 +1,14 @@
+[package]
+name = "cargo-pup-clean-architecture-example"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+description = "An executable experiment in clean architecture rules with cargo-pup"
+
+[lib]
+name = "clean_architecture_example"
+
+[lints.rust]
+unsafe_code = "forbid"

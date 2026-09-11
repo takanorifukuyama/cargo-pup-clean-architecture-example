@@ -1,0 +1,60 @@
+// These are lexical `use`-path rules, NOT a resolved dependency graph.
+// Match both each layer itself and all its descendant modules.
+// Match complete path segments: regex syntax is not glob syntax.
+(
+    lints: [
+        Module((
+            name: "domain_no_outer_imports",
+            matches: Module("^clean_architecture_example::domain(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)(application|infrastructure|presentation)(::|$)",
+                        "^(axum|sqlx|tokio|reqwest)(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "application_no_adapter_imports",
+            matches: Module("^clean_architecture_example::application(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)(infrastructure|presentation)(::|$)",
+                        "^(axum|sqlx|tokio|reqwest)(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "infrastructure_no_presentation_imports",
+            matches: Module("^clean_architecture_example::infrastructure(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some(["(^|::)presentation(::|$)"]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "presentation_no_infrastructure_imports",
+            matches: Module("^clean_architecture_example::presentation(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)infrastructure(::|$)",
+                        "^sqlx(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+    ],
+)
