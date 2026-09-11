@@ -60,7 +60,9 @@ pub fn place_order<R: OrderRepository>(
 ) -> Result<Receipt, PlaceOrderError> {
     let order = Order::new(input.product, input.quantity, input.unit_price_yen)
         .map_err(PlaceOrderError::InvalidOrder)?;
-    let order_id = repository.save(&order).map_err(PlaceOrderError::Persistence)?;
+    let order_id = repository
+        .save(&order)
+        .map_err(PlaceOrderError::Persistence)?;
     Ok(Receipt {
         order_id,
         total_yen: order.total_yen(),
