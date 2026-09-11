@@ -1,0 +1,77 @@
+// cargo-pup 0.1.8. These are regexes, NOT glob patterns.
+// Root modules and their descendants must both match.
+(
+    lints: [
+        Module((
+            name: "domain_no_outer_imports",
+            matches: Module("^clean_architecture::domain(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)(application|infrastructure|presentation)(::|$)",
+                        "^(axum|sqlx|tokio|reqwest)(::|$)",
+                        "^std::(fs|net|io|process)(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "application_no_adapters",
+            matches: Module("^clean_architecture::application(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)(infrastructure|presentation)(::|$)",
+                        "^(axum|sqlx|reqwest)(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "presentation_no_infrastructure",
+            matches: Module("^clean_architecture::presentation(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some([
+                        "(^|::)infrastructure(::|$)",
+                        "^sqlx(::|$)",
+                    ]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Module((
+            name: "infrastructure_no_presentation",
+            matches: Module("^clean_architecture::infrastructure(::|$)"),
+            rules: [
+                RestrictImports(
+                    allowed_only: None,
+                    denied: Some(["(^|::)presentation(::|$)"]),
+                    severity: Error,
+                ),
+            ],
+        )),
+        Struct((
+            // A project convention: the separate CLI binary constructs adapters.
+            name: "repository_adapters_public",
+            matches: Name(".*TaskRepository$"),
+            rules: [MustBePublic(Error)],
+        )),
+        Struct((
+            // OBSERVATION ONLY, NOT ENFORCEMENT in 0.1.8:
+            // StructRule::ImplementsTrait is defined but ignored by the checker.
+            // The missing_repository_trait fixture characterizes this gap.
+            // Actual adapters are constrained by Rust's CreateTask<R: TaskRepository>.
+            name: "probe_repository_trait_requirement",
+            matches: Name(".*TaskRepository$"),
+            rules: [
+                ImplementsTrait("^clean_architecture::application::TaskRepository$", Error),
+            ],
+        )),
+    ],
+)

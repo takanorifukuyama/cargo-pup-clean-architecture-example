@@ -1,0 +1,2 @@
+[alias]
+architecture-test = "test --test architecture -- --ignored --nocapture"
