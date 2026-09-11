@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Behavior and CLI tests
+        run: cargo test --locked --all-targets
+      - name: Architecture harness unit tests
+        run: python3 -m unittest discover -s scripts/tests -v
+
+  architecture:
+    name: Architecture contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Cache pinned cargo-pup installation
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .tools/cargo-pup
+          key: cargo-pup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pup-toolchain.toml', 'scripts/setup_pup.py') }}
+      - name: Install pinned nightly and cargo-pup
+        run: python3 scripts/setup_pup.py
+      - name: Check architecture and prove violations are detected
+        run: python3 scripts/check_architecture.py
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: architecture-check-logs
+          path: .test-artifacts/architecture/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

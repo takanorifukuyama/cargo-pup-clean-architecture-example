@@ -1,0 +1,3 @@
+# Update these together, then run the complete architecture regression suite.
+version = "0.1.8"
+toolchain = "nightly-2026-01-22"
