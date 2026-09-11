@@ -1,0 +1,1 @@
+# cargo-pup-clean-architecture-example
