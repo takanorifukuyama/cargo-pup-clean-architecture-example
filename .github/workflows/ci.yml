@@ -28,10 +28,19 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy including architecture macros
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Behavior and CLI tests
+      - name: Behavior, CLI, type contracts and compile-fail controls
         run: cargo test --locked --all-targets
-      - name: Architecture harness unit tests (no cargo-pup required)
-        run: cargo test --locked --features architecture-tests --test architecture support::tests
+      - name: Architecture harness and coverage unit tests (no cargo-pup required)
+        run: cargo test --locked --features architecture-tests --test architecture support::
+      - name: Preserve native compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: type-contract-logs
+          path: .test-artifacts/type-contracts/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
   architecture:
     name: Architecture contracts
@@ -48,7 +57,7 @@ jobs:
           key: cargo-pup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pup-toolchain.toml', 'scripts/setup_pup.py') }}
       - name: Install pinned nightly and cargo-pup
         run: python3 scripts/setup_pup.py
-      - name: Run Rust architecture rules and violation tests
+      - name: Run rules, visibility violations and coverage controls
         run: cargo test --locked --features architecture-tests --test architecture -- --nocapture
       - name: Architecture summary
         if: always()
@@ -57,7 +66,9 @@ jobs:
           {
             echo '## Rust architecture tests'
             echo
-            echo 'Violating fixtures must compile normally, then fail with the expected named cargo-pup diagnostic.'
+            echo 'Every selector must trigger a named coverage canary before the real rule runs.'
+            echo 'Violation fixtures must compile normally and fail with the expected named diagnostic.'
+            echo 'Missing-target controls pass only when the typed coverage error is observed.'
             echo 'KNOWN GAP is characterization, not protection.'
             echo
             echo '| Test | Result |'

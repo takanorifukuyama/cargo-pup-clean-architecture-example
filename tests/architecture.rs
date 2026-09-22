@@ -1,12 +1,10 @@
-//! Executable architecture rules. Start here, not in a Python script or RON file.
-//!
-//! Run: cargo test --locked --features architecture-tests --test architecture
-//! The local macro generates ordinary #[test] functions; cargo-pup does the analysis.
+//! Executable architecture rules. Run with --features architecture-tests.
+//! Each selector must trigger a coverage canary before its real rule is checked.
 
 #[path = "architecture/support.rs"]
 mod support;
 
-use support::architecture_rules;
+use support::{architecture_rules, visibility_rules};
 
 architecture_rules! {
     domain_inward_only {
@@ -44,6 +42,14 @@ architecture_rules! {
     }
 }
 
-// Mutation tests use the SAME rules, rather than a second configuration file.
+visibility_rules! {
+    task_store_stays_internal {
+        struct_name: TaskStore,
+        visibility: PubCrate,
+    }
+}
+
 #[path = "architecture/violations.rs"]
 mod violations;
+#[path = "architecture/extended.rs"]
+mod extended;

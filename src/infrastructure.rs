@@ -5,12 +5,18 @@ use std::collections::{btree_map::Entry, BTreeMap};
 
 #[derive(Debug, Default)]
 pub struct InMemoryTaskRepository {
-    tasks: BTreeMap<u64, Task>,
+    tasks: TaskStore,
+}
+
+// Internal storage representation must not become part of the public API.
+#[derive(Debug, Default)]
+pub(crate) struct TaskStore {
+    entries: BTreeMap<u64, Task>,
 }
 
 impl TaskRepository for InMemoryTaskRepository {
     fn insert(&mut self, task: &Task) -> Result<(), RepositoryError> {
-        match self.tasks.entry(task.id()) {
+        match self.tasks.entries.entry(task.id()) {
             Entry::Vacant(entry) => {
                 entry.insert(task.clone());
                 Ok(())
@@ -20,6 +26,6 @@ impl TaskRepository for InMemoryTaskRepository {
     }
 
     fn find(&self, id: u64) -> Result<Option<Task>, RepositoryError> {
-        Ok(self.tasks.get(&id).cloned())
+        Ok(self.tasks.entries.get(&id).cloned())
     }
 }
