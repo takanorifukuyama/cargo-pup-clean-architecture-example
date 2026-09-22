@@ -42,12 +42,17 @@ fn original_cargo_pup_known_gap_is_rejected_by_new_collector() -> TestResult {
         &[],
     )?;
     report("original_known_gap", &CLEAN, &graph)?;
-    let findings = CLEAN.check(&graph).expect_err("Original known gap survived");
-    assert!(findings.iter().any(|f| matches!(f,
-        Finding::Forbidden { from, to, edge }
-        if from == "domain" && to == "infrastructure"
-            && edge.symbol.ends_with("InMemoryTaskRepository")
-    )), "Expected actual repository type, got {findings:?}");
+    let findings = CLEAN
+        .check(&graph)
+        .expect_err("Original known gap survived");
+    assert!(
+        findings.iter().any(|f| matches!(f,
+            Finding::Forbidden { from, to, edge }
+            if from == "domain" && to == "infrastructure"
+                && edge.symbol.ends_with("InMemoryTaskRepository")
+        )),
+        "Expected actual repository type, got {findings:?}"
+    );
     Ok(())
 }
 
@@ -65,7 +70,10 @@ fn ordinary_compilation_error_is_not_architecture_detection() -> TestResult {
 fn allowing_warnings_does_not_disable_reference_collection() -> TestResult {
     let source = format!(
         "#![allow(warnings)]\n{}",
-        fixture("pub fn leak() { let _ = crate::infrastructure::Repo::new(); }", "")
+        fixture(
+            "pub fn leak() { let _ = crate::infrastructure::Repo::new(); }",
+            ""
+        )
     );
     let graph = run_source("allow_warnings", &source, &[])?;
     assert_forbidden("allow_warnings", &graph)
