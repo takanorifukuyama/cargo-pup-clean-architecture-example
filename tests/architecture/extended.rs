@@ -1,6 +1,8 @@
 //! Real cargo-pup controls: empty selectors fail; visibility violations compile first.
 
-use crate::support::{self, Edit, Expectation, Replacement, Rule, TestResult, Visibility, VisibilityRule};
+use crate::support::{
+    self, Edit, Expectation, Replacement, Rule, TestResult, Visibility, VisibilityRule,
+};
 
 macro_rules! visibility_violation {
     ($name:ident, $replacement:literal) => {
@@ -23,7 +25,10 @@ macro_rules! visibility_violation {
 
 visibility_violation!(internal_storage_cannot_be_public, "pub struct TaskStore");
 visibility_violation!(crate_visibility_is_an_explicit_contract, "struct TaskStore");
-visibility_violation!(narrower_visibility_is_rejected, "pub(in crate::infrastructure) struct TaskStore");
+visibility_violation!(
+    narrower_visibility_is_rejected,
+    "pub(in crate::infrastructure) struct TaskStore"
+);
 
 #[test]
 fn misspelled_module_is_rejected() -> TestResult {

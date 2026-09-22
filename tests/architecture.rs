@@ -49,7 +49,7 @@ visibility_rules! {
     }
 }
 
-#[path = "architecture/violations.rs"]
-mod violations;
 #[path = "architecture/extended.rs"]
 mod extended;
+#[path = "architecture/violations.rs"]
+mod violations;

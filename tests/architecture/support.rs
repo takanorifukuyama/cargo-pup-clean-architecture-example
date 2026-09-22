@@ -129,7 +129,11 @@ struct MissingTarget(String);
 
 impl fmt::Display for MissingTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "No coverage evidence for {}: missing/cfg-disabled target or suppressed canary", self.0)
+        write!(
+            f,
+            "No coverage evidence for {}: missing/cfg-disabled target or suppressed canary",
+            self.0
+        )
     }
 }
 
@@ -380,7 +384,9 @@ fn mutate(project: &Path, mutation: Mutation) -> TestResult {
         Mutation::Replace(edit) => edit.file,
     };
     let path = Path::new(file);
-    if !path.components().all(|part| matches!(part, Component::Normal(_)))
+    if !path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
         || !path.starts_with("src")
     {
         return Err(format!("Mutation must name a relative file under src/: {file}").into());
@@ -388,7 +394,11 @@ fn mutate(project: &Path, mutation: Mutation) -> TestResult {
     let path = project.join(path);
     match mutation {
         Mutation::Append(edit) => {
-            writeln!(OpenOptions::new().append(true).open(path)?, "\n{}", edit.code)?;
+            writeln!(
+                OpenOptions::new().append(true).open(path)?,
+                "\n{}",
+                edit.code
+            )?;
         }
         Mutation::Replace(edit) => {
             let updated = replace_once(&fs::read_to_string(&path)?, edit.before, edit.after)?;
@@ -420,10 +430,17 @@ fn run(
         &logs.join(format!("{name}.version.log")),
     )?;
     if code != Some(0) || strip_ansi(&output).trim() != format!("cargo-pup version {version}") {
-        return Err(format!("Wrong cargo-pup version; rerun scripts/setup_pup.py:\n{output}").into());
+        return Err(
+            format!("Wrong cargo-pup version; rerun scripts/setup_pup.py:\n{output}").into(),
+        );
     }
     let project = Project::new()?;
-    for file in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "pup-toolchain.toml"] {
+    for file in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "pup-toolchain.toml",
+    ] {
         fs::copy(root.join(file), project.0.join(file))?;
     }
     for directory in ["src", "tests"] {
@@ -435,16 +452,29 @@ fn run(
     // Compile all default-feature targets first; never recursively execute tests.
     let (code, output) = execute(
         Command::new("rustup")
-            .args(["run", toolchain, "cargo", "check", "--locked", "--all-targets", "--target-dir"])
+            .args([
+                "run",
+                toolchain,
+                "cargo",
+                "check",
+                "--locked",
+                "--all-targets",
+                "--target-dir",
+            ])
             .arg(project.0.join("target"))
             .current_dir(&project.0),
         &logs.join(format!("{name}.compile.log")),
     )?;
     if code != Some(0) {
-        return Err(format!("Fixture must compile normally before checking architecture:\n{output}").into());
+        return Err(format!(
+            "Fixture must compile normally before checking architecture:\n{output}"
+        )
+        .into());
     }
     let mut paths = vec![pup.parent().ok_or("Missing tool directory")?.to_path_buf()];
-    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     let search_path = std::env::join_paths(paths)?;
     // Same selector, same source and same --lib scope. ^$ cannot match a Rust name.
     // No .pup reuse: cargo-pup does not reliably invalidate on RON changes alone.
@@ -472,8 +502,15 @@ fn run(
                 Lint::Imports(_) => "Module must match",
                 Lint::Visibility(_) => "Struct must match",
             };
-            if !named_error(code, &output, &format!("coverage_{}", lint.name()), &[subject, "^$"]) {
-                return Err(format!("Coverage probe failed for an unexpected reason:\n{output}").into());
+            if !named_error(
+                code,
+                &output,
+                &format!("coverage_{}", lint.name()),
+                &[subject, "^$"],
+            ) {
+                return Err(
+                    format!("Coverage probe failed for an unexpected reason:\n{output}").into(),
+                );
             }
         } else {
             match lint {
@@ -487,7 +524,11 @@ fn run(
                         _ => false,
                     };
                     if !valid {
-                        return Err(format!("Unexpected visibility result for {}:\n{output}", lint.name()).into());
+                        return Err(format!(
+                            "Unexpected visibility result for {}:\n{output}",
+                            lint.name()
+                        )
+                        .into());
                     }
                 }
             }
@@ -496,7 +537,12 @@ fn run(
     Ok(())
 }
 
-fn check_lint(name: &str, lint: Lint<'_>, mutation: Option<Mutation>, expected: Expectation) -> TestResult {
+fn check_lint(
+    name: &str,
+    lint: Lint<'_>,
+    mutation: Option<Mutation>,
+    expected: Expectation,
+) -> TestResult {
     normalized_path(name)?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let logs = root.join(".test-artifacts/architecture");
@@ -517,13 +563,21 @@ fn check_lint(name: &str, lint: Lint<'_>, mutation: Option<Mutation>, expected: 
         (Ok(()), Expectation::MissingTarget) => "PASS (missing target rejected)",
         (Ok(()), _) => "PASS",
     };
-    fs::write(logs.join(format!("{name}.result.md")), format!("| `{name}` | {outcome} |\n"))?;
+    fs::write(
+        logs.join(format!("{name}.result.md")),
+        format!("| `{name}` | {outcome} |\n"),
+    )?;
     println!("{outcome}: {name}; logs: {}", logs.display());
     result
 }
 
 pub fn check(name: &str, rule: &Rule, edit: Option<Edit>, expected: Expectation) -> TestResult {
-    check_lint(name, Lint::Imports(rule), edit.map(Mutation::Append), expected)
+    check_lint(
+        name,
+        Lint::Imports(rule),
+        edit.map(Mutation::Append),
+        expected,
+    )
 }
 
 pub fn check_visibility(
@@ -532,7 +586,12 @@ pub fn check_visibility(
     edit: Option<Replacement>,
     expected: Expectation,
 ) -> TestResult {
-    check_lint(name, Lint::Visibility(rule), edit.map(Mutation::Replace), expected)
+    check_lint(
+        name,
+        Lint::Visibility(rule),
+        edit.map(Mutation::Replace),
+        expected,
+    )
 }
 
 #[cfg(test)]

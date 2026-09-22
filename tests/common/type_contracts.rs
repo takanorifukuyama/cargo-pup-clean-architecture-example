@@ -7,7 +7,10 @@ macro_rules! type_contracts {
     })+) => {
         $(#[test]
         fn $name() {
-            fn assert_contract<T: $($bound)+*>() {}
+            fn assert_contract<T>()
+            where
+                $(T: $bound,)+
+            {}
             assert_contract::<$ty>();
         })+
     };

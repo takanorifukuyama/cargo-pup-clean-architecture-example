@@ -29,11 +29,15 @@ type_contracts! {
 fn verify_bound_error(code: Option<i32>, output: &str, bound: &str) -> TestResult {
     let valid = code.is_some_and(|value| value > 0)
         && output.lines().any(|line| {
-            line.starts_with("error[E0277]:")
-                && (line.contains(bound) || (bound == "Send" && line.contains("sent between threads")))
-                || line.starts_with("error[E0277]:")
-                    && bound == "Sync"
-                    && line.contains("shared between threads")
+            if !line.starts_with("error[E0277]:") {
+                return false;
+            }
+            line.contains(bound)
+                || match bound {
+                    "Send" => line.contains("sent between threads"),
+                    "Sync" => line.contains("shared between threads"),
+                    _ => false,
+                }
         })
         && !output.contains("internal compiler error")
         && !output.contains("panicked at");
@@ -44,7 +48,12 @@ fn verify_bound_error(code: Option<i32>, output: &str, bound: &str) -> TestResul
     }
 }
 
-fn compiler_case(name: &str, declarations: &str, contract: &str, bound: Option<&str>) -> TestResult {
+fn compiler_case(
+    name: &str,
+    declarations: &str,
+    contract: &str,
+    bound: Option<&str>,
+) -> TestResult {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project = Project::new()?;
     let logs = root.join(".test-artifacts/type-contracts");
