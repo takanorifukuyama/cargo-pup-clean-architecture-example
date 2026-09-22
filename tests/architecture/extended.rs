@@ -77,17 +77,10 @@ fn misspelled_struct_is_rejected() -> TestResult {
 
 #[test]
 fn suppressing_the_canary_is_rejected() -> TestResult {
-    support::check(
+    // Disable compiler lints inside a disposable fixture only. The real domain
+    // exists, but coverage must reject the lack of a named canary diagnostic.
+    support::check_suppressed_coverage(
         "suppressing_the_canary_is_rejected",
-        &Rule {
-            name: "suppressed_module",
-            module: "clean_architecture::suppressed_scope",
-            deny_imports: &["std::fs"],
-        },
-        Some(Edit {
-            file: "src/lib.rs",
-            code: "#[allow(unknown_lints, module_must_be_named)] pub mod suppressed_scope {}",
-        }),
-        Expectation::MissingTarget,
+        support::find_rule(crate::RULES, "domain_inward_only")?,
     )
 }

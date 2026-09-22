@@ -148,6 +148,7 @@ enum Lint<'a> {
 enum Mutation {
     Append(Edit),
     Replace(Replacement),
+    CapLints,
 }
 
 pub fn find_rule<'a>(rules: &'a [Rule], name: &str) -> TestResult<&'a Rule> {
@@ -379,9 +380,18 @@ fn replace_once(text: &str, before: &str, after: &str) -> TestResult<String> {
 }
 
 fn mutate(project: &Path, mutation: Mutation) -> TestResult {
-    let file = match &mutation {
-        Mutation::Append(edit) => edit.file,
-        Mutation::Replace(edit) => edit.file,
+    let (file, before, code) = match mutation {
+        Mutation::Append(edit) => (edit.file, None, edit.code),
+        Mutation::Replace(edit) => (edit.file, Some(edit.before), edit.after),
+        Mutation::CapLints => {
+            // A deliberate negative control, confined to this temporary fixture.
+            fs::create_dir(project.join(".cargo"))?;
+            fs::write(
+                project.join(".cargo/config.toml"),
+                "[build]\nrustflags = [\"--cap-lints=allow\"]\n",
+            )?;
+            return Ok(());
+        }
     };
     let path = Path::new(file);
     if !path
@@ -392,18 +402,11 @@ fn mutate(project: &Path, mutation: Mutation) -> TestResult {
         return Err(format!("Mutation must name a relative file under src/: {file}").into());
     }
     let path = project.join(path);
-    match mutation {
-        Mutation::Append(edit) => {
-            writeln!(
-                OpenOptions::new().append(true).open(path)?,
-                "\n{}",
-                edit.code
-            )?;
-        }
-        Mutation::Replace(edit) => {
-            let updated = replace_once(&fs::read_to_string(&path)?, edit.before, edit.after)?;
-            fs::write(path, updated)?;
-        }
+    if let Some(before) = before {
+        let updated = replace_once(&fs::read_to_string(&path)?, before, code)?;
+        fs::write(path, updated)?;
+    } else {
+        writeln!(OpenOptions::new().append(true).open(path)?, "\n{code}")?;
     }
     Ok(())
 }
@@ -591,6 +594,15 @@ pub fn check_visibility(
         Lint::Visibility(rule),
         edit.map(Mutation::Replace),
         expected,
+    )
+}
+
+pub fn check_suppressed_coverage(name: &str, rule: &Rule) -> TestResult {
+    check_lint(
+        name,
+        Lint::Imports(rule),
+        Some(Mutation::CapLints),
+        Expectation::MissingTarget,
     )
 }
 
