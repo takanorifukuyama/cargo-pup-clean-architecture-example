@@ -27,7 +27,7 @@ fn hex(text: &str) -> String {
 }
 
 fn unhex(text: &str) -> Result<String, String> {
-    if text.len() % 2 != 0 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid graph field encoding".into());
     }
     let bytes = (0..text.len())
@@ -43,15 +43,17 @@ impl Graph {
             return Err("Graph must contain its crate root".into());
         }
         for module in &self.modules {
-            if module != &self.crate_name
-                && !module.starts_with(&format!("{}::", self.crate_name))
+            if module != &self.crate_name && !module.starts_with(&format!("{}::", self.crate_name))
             {
                 return Err(format!("Module outside collected crate: {module}"));
             }
         }
         for edge in &self.edges {
-            if !self.modules.contains(&edge.from) || !self.modules.contains(&edge.to)
-                || edge.symbol.is_empty() || edge.location.is_empty() || edge.kind.is_empty()
+            if !self.modules.contains(&edge.from)
+                || !self.modules.contains(&edge.to)
+                || edge.symbol.is_empty()
+                || edge.location.is_empty()
+                || edge.kind.is_empty()
             {
                 return Err(format!("Invalid edge: {edge:?}"));
             }
@@ -66,8 +68,17 @@ impl Graph {
             output.push_str(&format!("M\t{}\n", hex(module)));
         }
         for edge in &self.edges {
-            let fields = [&edge.from, &edge.to, &edge.symbol, &edge.location, &edge.kind];
-            output.push_str(&format!("E\t{}\n", fields.iter().map(|s| hex(s)).collect::<Vec<_>>().join("\t")));
+            let fields = [
+                &edge.from,
+                &edge.to,
+                &edge.symbol,
+                &edge.location,
+                &edge.kind,
+            ];
+            output.push_str(&format!(
+                "E\t{}\n",
+                fields.iter().map(|s| hex(s)).collect::<Vec<_>>().join("\t")
+            ));
         }
         output.push_str("END\n");
         output
@@ -98,8 +109,11 @@ impl Graph {
                 }
                 ["E", from, to, symbol, location, kind] => {
                     if !graph.edges.insert(Edge {
-                        from: unhex(from)?, to: unhex(to)?, symbol: unhex(symbol)?,
-                        location: unhex(location)?, kind: unhex(kind)?,
+                        from: unhex(from)?,
+                        to: unhex(to)?,
+                        symbol: unhex(symbol)?,
+                        location: unhex(location)?,
+                        kind: unhex(kind)?,
                     }) {
                         return Err("Duplicate edge in graph".into());
                     }
@@ -118,7 +132,12 @@ impl Graph {
     /// Module graph for Graphviz. It includes same-layer module dependencies.
     pub fn dot(&self) -> String {
         fn quote(s: &str) -> String {
-            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+            format!(
+                "\"{}\"",
+                s.replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+            )
         }
         let mut out = String::from("digraph modules {\n");
         for module in &self.modules {
@@ -151,7 +170,11 @@ pub enum Finding {
     Invalid(String),
     MissingLayer(String),
     Unclassified(String),
-    Forbidden { from: String, to: String, edge: Edge },
+    Forbidden {
+        from: String,
+        to: String,
+        edge: Edge,
+    },
     Cycle(Vec<String>),
 }
 
@@ -167,7 +190,9 @@ impl Policy {
         }
         for layer in self.layers {
             if layer.name.is_empty() || layer.module.is_empty() || !names.insert(layer.name) {
-                return Err(vec![Finding::Invalid("Empty/duplicate layer declaration".into())]);
+                return Err(vec![Finding::Invalid(
+                    "Empty/duplicate layer declaration".into(),
+                )]);
             }
         }
         for (i, layer) in self.layers.iter().enumerate() {
@@ -175,21 +200,32 @@ impl Policy {
                 if within(layer.module, other.module, &graph.crate_name)
                     || within(other.module, layer.module, &graph.crate_name)
                 {
-                    return Err(vec![Finding::Invalid(format!("Overlapping layer selectors: {} / {}", layer.name, other.name))]);
+                    return Err(vec![Finding::Invalid(format!(
+                        "Overlapping layer selectors: {} / {}",
+                        layer.name, other.name
+                    ))]);
                 }
             }
             let mut seen = BTreeSet::new();
             for allowed in layer.allows {
                 if !names.contains(allowed) || !seen.insert(*allowed) {
-                    return Err(vec![Finding::Invalid(format!("Unknown/duplicate allowed layer: {allowed}"))]);
+                    return Err(vec![Finding::Invalid(format!(
+                        "Unknown/duplicate allowed layer: {allowed}"
+                    ))]);
                 }
             }
         }
         let mut findings = Vec::new();
         let mut owners = BTreeMap::new();
         for module in &graph.modules {
-            match self.layers.iter().position(|l| within(module, l.module, &graph.crate_name)) {
-                Some(index) => { owners.insert(module.as_str(), index); }
+            match self
+                .layers
+                .iter()
+                .position(|l| within(module, l.module, &graph.crate_name))
+            {
+                Some(index) => {
+                    owners.insert(module.as_str(), index);
+                }
                 None => findings.push(Finding::Unclassified(module.clone())),
             }
         }
@@ -200,33 +236,51 @@ impl Policy {
         }
         let mut adjacency = vec![BTreeSet::new(); self.layers.len()];
         for edge in &graph.edges {
-            let (Some(&from), Some(&to)) = (owners.get(edge.from.as_str()), owners.get(edge.to.as_str())) else {
+            let (Some(&from), Some(&to)) =
+                (owners.get(edge.from.as_str()), owners.get(edge.to.as_str()))
+            else {
                 continue;
             };
-            if from == to { continue; }
+            if from == to {
+                continue;
+            }
             adjacency[from].insert(to);
             if !self.layers[from].allows.contains(&self.layers[to].name) {
                 findings.push(Finding::Forbidden {
-                    from: self.layers[from].name.into(), to: self.layers[to].name.into(), edge: edge.clone(),
+                    from: self.layers[from].name.into(),
+                    to: self.layers[to].name.into(),
+                    edge: edge.clone(),
                 });
             }
         }
         if self.acyclic {
             if let Some(cycle) = first_cycle(&adjacency) {
-                findings.push(Finding::Cycle(cycle.into_iter().map(|i| self.layers[i].name.into()).collect()));
+                findings.push(Finding::Cycle(
+                    cycle
+                        .into_iter()
+                        .map(|i| self.layers[i].name.into())
+                        .collect(),
+                ));
             }
         }
-        if findings.is_empty() { Ok(()) } else { Err(findings) }
+        if findings.is_empty() {
+            Ok(())
+        } else {
+            Err(findings)
+        }
     }
 
     pub fn report(&self, graph: &Graph) -> String {
-        let mut report = format!("# Resolved layer contracts\n\nModules: {}. References: {}.\n\n", graph.modules.len(), graph.edges.len());
+        let mut report = format!(
+            "# Resolved layer contracts\n\nModules: {}. References: {}.\n\n",
+            graph.modules.len(),
+            graph.edges.len()
+        );
         match self.check(graph) {
             Ok(()) => report.push_str("PASS\n"),
             Err(findings) => {
                 report.push_str("FAIL\n\n");
                 for finding in findings {
-                    // Fenced diagnostics avoid interpreting source paths as Markdown.
                     report.push_str(&format!("    {finding:?}\n\n"));
                 }
             }
@@ -236,7 +290,12 @@ impl Policy {
 }
 
 fn first_cycle(adjacency: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
-    fn visit(node: usize, adjacency: &[BTreeSet<usize>], state: &mut [u8], stack: &mut Vec<usize>) -> Option<Vec<usize>> {
+    fn visit(
+        node: usize,
+        adjacency: &[BTreeSet<usize>],
+        state: &mut [u8],
+        stack: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
         state[node] = 1;
         stack.push(node);
         for &next in &adjacency[node] {
@@ -247,7 +306,9 @@ fn first_cycle(adjacency: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
                 return Some(cycle);
             }
             if state[next] == 0 {
-                if let Some(cycle) = visit(next, adjacency, state, stack) { return Some(cycle); }
+                if let Some(cycle) = visit(next, adjacency, state, stack) {
+                    return Some(cycle);
+                }
             }
         }
         stack.pop();
@@ -257,7 +318,9 @@ fn first_cycle(adjacency: &[BTreeSet<usize>]) -> Option<Vec<usize>> {
     let mut state = vec![0; adjacency.len()];
     for node in 0..adjacency.len() {
         if state[node] == 0 {
-            if let Some(cycle) = visit(node, adjacency, &mut state, &mut Vec::new()) { return Some(cycle); }
+            if let Some(cycle) = visit(node, adjacency, &mut state, &mut Vec::new()) {
+                return Some(cycle);
+            }
         }
     }
     None

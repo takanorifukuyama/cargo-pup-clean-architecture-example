@@ -45,14 +45,7 @@ struct Collector {
 impl_lint_pass!(Collector => []);
 
 impl Collector {
-    fn reference(
-        &self,
-        cx: &LateContext<'_>,
-        owner: HirId,
-        target: DefId,
-        span: Span,
-        kind: &str,
-    ) {
+    fn reference(&self, cx: &LateContext<'_>, owner: HirId, target: DefId, span: Span, kind: &str) {
         if !target.is_local() {
             return;
         }
@@ -99,7 +92,10 @@ impl Collector {
                     }
                 }
             }
-            ty::Ref(_, inner, _) | ty::RawPtr(inner, _) | ty::Slice(inner) | ty::Array(inner, _) => {
+            ty::Ref(_, inner, _)
+            | ty::RawPtr(inner, _)
+            | ty::Slice(inner)
+            | ty::Array(inner, _) => {
                 self.inferred(cx, expr, *inner, depth + 1);
             }
             ty::Tuple(fields) => {
@@ -145,7 +141,13 @@ impl<'tcx> LateLintPass<'tcx> for Collector {
 
     fn check_ty(&mut self, cx: &LateContext<'tcx>, ty: &'tcx Ty<'tcx, AmbigArg>) {
         if let TyKind::Path(ref path) = ty.kind {
-            self.resolved(cx, ty.hir_id, cx.qpath_res(path, ty.hir_id), ty.span, "type-path");
+            self.resolved(
+                cx,
+                ty.hir_id,
+                cx.qpath_res(path, ty.hir_id),
+                ty.span,
+                "type-path",
+            );
         }
     }
 
@@ -194,8 +196,8 @@ impl Callbacks for Driver {
 }
 
 fn main() {
-    let output = std::env::var_os("LAYER_GRAPH_OUT")
-        .expect("Set LAYER_GRAPH_OUT to a new graph path");
+    let output =
+        std::env::var_os("LAYER_GRAPH_OUT").expect("Set LAYER_GRAPH_OUT to a new graph path");
     let args: Vec<String> = std::env::args().collect();
     let mut driver = Driver::default();
     rustc_driver::run_compiler(&args, &mut driver);
@@ -208,5 +210,6 @@ fn main() {
         .create_new(true)
         .open(output)
         .expect("Graph output must be new and writable");
-    file.write_all(graph.encode().as_bytes()).expect("Write graph");
+    file.write_all(graph.encode().as_bytes())
+        .expect("Write graph");
 }

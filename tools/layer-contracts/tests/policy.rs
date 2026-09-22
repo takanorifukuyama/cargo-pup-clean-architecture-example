@@ -96,22 +96,44 @@ fn unknown_allowance_fails_even_without_edges() {
 fn duplicate_names_and_overlapping_prefixes_are_rejected() {
     for layers in [
         &[
-            Layer { name: "one", module: "app", allows: &[] },
-            Layer { name: "one", module: "app::inner", allows: &[] },
+            Layer {
+                name: "one",
+                module: "app",
+                allows: &[],
+            },
+            Layer {
+                name: "one",
+                module: "app::inner",
+                allows: &[],
+            },
         ][..],
         &[
-            Layer { name: "one", module: "app::inner", allows: &[] },
-            Layer { name: "two", module: "app::inner::nested", allows: &[] },
+            Layer {
+                name: "one",
+                module: "app::inner",
+                allows: &[],
+            },
+            Layer {
+                name: "two",
+                module: "app::inner::nested",
+                allows: &[],
+            },
         ][..],
     ] {
-        let policy = Policy { layers, acyclic: false };
+        let policy = Policy {
+            layers,
+            acyclic: false,
+        };
         assert!(matches!(policy.check(&graph()), Err(v) if matches!(v[0], Finding::Invalid(_))));
     }
 }
 
 #[test]
 fn empty_policy_is_invalid() {
-    let policy = Policy { layers: &[], acyclic: true };
+    let policy = Policy {
+        layers: &[],
+        acyclic: true,
+    };
     assert!(matches!(policy.check(&graph()), Err(v) if matches!(v[0], Finding::Invalid(_))));
 }
 
