@@ -13,7 +13,7 @@ use layer_contracts::{Edge, Graph};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-use rustc_hir::{Expr, ExprKind, HirId, Path, Ty, TyKind};
+use rustc_hir::{AmbigArg, Expr, ExprKind, HirId, Path, Ty, TyKind};
 use rustc_interface::interface;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty::{self, TyCtxt};
@@ -24,7 +24,11 @@ use std::sync::{Arc, Mutex};
 fn full_name(tcx: TyCtxt<'_>, id: DefId) -> String {
     let name = tcx.crate_name(id.krate).to_string();
     let path = tcx.def_path_str(id);
-    if path.is_empty() { name } else { format!("{name}::{path}") }
+    if path.is_empty() {
+        name
+    } else {
+        format!("{name}::{path}")
+    }
 }
 
 fn module_of(tcx: TyCtxt<'_>, mut id: DefId) -> String {
@@ -41,42 +45,74 @@ struct Collector {
 impl_lint_pass!(Collector => []);
 
 impl Collector {
-    fn reference(&self, cx: &LateContext<'_>, owner: HirId, target: DefId, span: Span, kind: &str) {
-        if !target.is_local() { return; }
+    fn reference(
+        &self,
+        cx: &LateContext<'_>,
+        owner: HirId,
+        target: DefId,
+        span: Span,
+        kind: &str,
+    ) {
+        if !target.is_local() {
+            return;
+        }
         let from = module_of(cx.tcx, owner.owner.def_id.to_def_id());
         let to = module_of(cx.tcx, target);
-        if from == to { return; }
-        let location = cx.tcx.sess.source_map().span_to_diagnostic_string(span.source_callsite());
-        self.graph.lock().expect("collector lock").edges.insert(Edge {
-            from, to, symbol: full_name(cx.tcx, target), location, kind: kind.into(),
-        });
+        if from == to {
+            return;
+        }
+        let location = cx
+            .tcx
+            .sess
+            .source_map()
+            .span_to_diagnostic_string(span.source_callsite());
+        self.graph
+            .lock()
+            .expect("collector lock")
+            .edges
+            .insert(Edge {
+                from,
+                to,
+                symbol: full_name(cx.tcx, target),
+                location,
+                kind: kind.into(),
+            });
     }
 
     fn resolved(&self, cx: &LateContext<'_>, owner: HirId, res: Res, span: Span, kind: &str) {
-        if let Res::Def(_, target) = res { self.reference(cx, owner, target, span, kind); }
+        if let Res::Def(_, target) = res {
+            self.reference(cx, owner, target, span, kind);
+        }
     }
 
-    // Track concrete types inferred for expressions, including containers and aliases.
-    // This is not call-graph devirtualization: generic/dynamic dispatch stays abstract.
+    // Not call-graph devirtualization: generic/dynamic dispatch stays abstract.
     fn inferred(&self, cx: &LateContext<'_>, expr: &Expr<'_>, ty: ty::Ty<'_>, depth: usize) {
-        if depth > 64 { panic!("Unsupported type nesting beyond 64; refusing partial graph"); }
+        if depth > 64 {
+            panic!("Unsupported type nesting beyond 64; refusing partial graph");
+        }
         match ty.kind() {
             ty::Adt(def, args) => {
                 self.reference(cx, expr.hir_id, def.did(), expr.span, "inferred-type");
                 for arg in args.iter() {
-                    if let Some(ty) = arg.as_type() { self.inferred(cx, expr, ty, depth + 1); }
+                    if let Some(ty) = arg.as_type() {
+                        self.inferred(cx, expr, ty, depth + 1);
+                    }
                 }
             }
             ty::Ref(_, inner, _) | ty::RawPtr(inner, _) | ty::Slice(inner) | ty::Array(inner, _) => {
                 self.inferred(cx, expr, *inner, depth + 1);
             }
             ty::Tuple(fields) => {
-                for ty in fields.iter() { self.inferred(cx, expr, ty, depth + 1); }
+                for ty in fields.iter() {
+                    self.inferred(cx, expr, ty, depth + 1);
+                }
             }
             ty::FnDef(def, args) => {
                 self.reference(cx, expr.hir_id, *def, expr.span, "function-item");
                 for arg in args.iter() {
-                    if let Some(ty) = arg.as_type() { self.inferred(cx, expr, ty, depth + 1); }
+                    if let Some(ty) = arg.as_type() {
+                        self.inferred(cx, expr, ty, depth + 1);
+                    }
                 }
             }
             ty::Alias(_, alias) => {
@@ -96,14 +132,18 @@ impl<'tcx> LateLintPass<'tcx> for Collector {
     }
 
     fn check_mod(&mut self, cx: &LateContext<'tcx>, _: &'tcx rustc_hir::Mod<'tcx>, id: HirId) {
-        self.graph.lock().expect("collector lock").modules.insert(module_of(cx.tcx, id.owner.def_id.to_def_id()));
+        self.graph
+            .lock()
+            .expect("collector lock")
+            .modules
+            .insert(module_of(cx.tcx, id.owner.def_id.to_def_id()));
     }
 
     fn check_path(&mut self, cx: &LateContext<'tcx>, path: &Path<'tcx>, id: HirId) {
         self.resolved(cx, id, path.res, path.span, "path");
     }
 
-    fn check_ty(&mut self, cx: &LateContext<'tcx>, ty: &'tcx Ty<'tcx>) {
+    fn check_ty(&mut self, cx: &LateContext<'tcx>, ty: &'tcx Ty<'tcx, AmbigArg>) {
         if let TyKind::Path(ref path) = ty.kind {
             self.resolved(cx, ty.hir_id, cx.qpath_res(path, ty.hir_id), ty.span, "type-path");
         }
@@ -111,7 +151,13 @@ impl<'tcx> LateLintPass<'tcx> for Collector {
 
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::Path(ref path) = expr.kind {
-            self.resolved(cx, expr.hir_id, cx.qpath_res(path, expr.hir_id), expr.span, "expression-path");
+            self.resolved(
+                cx,
+                expr.hir_id,
+                cx.qpath_res(path, expr.hir_id),
+                expr.span,
+                "expression-path",
+            );
         }
         if let ExprKind::MethodCall(..) = expr.kind {
             if let Some(def) = cx.typeck_results().type_dependent_def_id(expr.hir_id) {
@@ -133,7 +179,11 @@ impl Callbacks for Driver {
         let graph = self.graph.clone();
         config.register_lints = Some(Box::new(move |_, store| {
             let graph = graph.clone();
-            store.register_late_pass(move |_| Box::new(Collector { graph: graph.clone() }));
+            store.register_late_pass(move |_| {
+                Box::new(Collector {
+                    graph: graph.clone(),
+                })
+            });
         }));
     }
 
@@ -144,7 +194,8 @@ impl Callbacks for Driver {
 }
 
 fn main() {
-    let output = std::env::var_os("LAYER_GRAPH_OUT").expect("Set LAYER_GRAPH_OUT to a new graph path");
+    let output = std::env::var_os("LAYER_GRAPH_OUT")
+        .expect("Set LAYER_GRAPH_OUT to a new graph path");
     let args: Vec<String> = std::env::args().collect();
     let mut driver = Driver::default();
     rustc_driver::run_compiler(&args, &mut driver);
@@ -152,7 +203,10 @@ fn main() {
     let graph = driver.graph.lock().expect("collector lock");
     graph.validate().expect("Incomplete compiler graph");
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
         .expect("Graph output must be new and writable");
     file.write_all(graph.encode().as_bytes()).expect("Write graph");
 }
