@@ -1,0 +1,18 @@
+[package]
+name = "task-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+task-application = { path = "../application" }
+task-infrastructure = { path = "../infrastructure" }
+task-presentation = { path = "../presentation" }
+
+[dev-dependencies]
+task-domain = { path = "../domain" }
+
+[[bin]]
+name = "multi-task-demo"
+path = "src/main.rs"

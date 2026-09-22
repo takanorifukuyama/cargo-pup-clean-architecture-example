@@ -1,0 +1,76 @@
+name: Dependency contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formatting:
+    name: Multi-crate formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install stable rustfmt
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Check both workspaces
+        shell: bash
+        run: |
+          failed=0
+          for manifest in examples/multi-crate/Cargo.toml tools/dependency-contracts/Cargo.toml; do
+            cargo fmt --manifest-path "$manifest" --all -- --check || failed=1
+          done
+          exit "$failed"
+
+  contracts:
+    name: Crate dependency contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - name: Lint multi-crate example
+        run: cargo clippy --manifest-path examples/multi-crate/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Test multi-crate behavior
+        run: cargo test --manifest-path examples/multi-crate/Cargo.toml --workspace --all-targets --locked
+      - name: Lint Rust dependency contracts
+        run: cargo clippy --manifest-path tools/dependency-contracts/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Test declared dependencies and negative controls
+        run: cargo test --manifest-path tools/dependency-contracts/Cargo.toml --locked -- --nocapture
+      - name: Dependency summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Declared direct dependency contracts'
+            echo 'Normal/dev/build are checked separately, including inactive optional and target-specific declarations.'
+            echo 'All workspace members require a rule. Allowed names identify the expected local workspace package.'
+            echo 'Negative controls must compile successfully before the expected policy error is accepted.'
+            echo
+            if [ -d .test-artifacts/dependency-contracts ]; then
+              find .test-artifacts/dependency-contracts -name result.txt -exec cat {} + | sort
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve metadata and compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-contract-logs
+          path: .test-artifacts/dependency-contracts/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

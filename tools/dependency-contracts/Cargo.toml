@@ -1,0 +1,16 @@
+[package]
+name = "dependency-contract-example"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Keep dependencies of the test harness out of both application examples.
+[workspace]
+
+[dev-dependencies]
+serde_json = "=1.0.149"
+
+[[test]]
+name = "dependencies"
+path = "tests/dependencies.rs"
