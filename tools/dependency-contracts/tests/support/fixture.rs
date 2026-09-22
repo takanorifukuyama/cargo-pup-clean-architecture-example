@@ -35,13 +35,19 @@ impl Fixture {
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err("Invalid fixture name".into());
         }
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()?;
         let project = Project::new()?;
         let workspace = project.0.join("workspace");
         copy(&root.join("examples/multi-crate"), &workspace)?;
         let logs = root.join(".test-artifacts/dependency-contracts").join(name);
         fs::create_dir_all(&logs)?;
-        Ok(Self { _project: project, workspace, logs })
+        Ok(Self {
+            _project: project,
+            workspace,
+            logs,
+        })
     }
 
     pub fn cargo(&self, phase: &str, args: &[&str]) -> TestResult<(Option<i32>, String)> {
@@ -65,21 +71,41 @@ impl Fixture {
     pub fn compile_mutation(&self) -> TestResult {
         // Only the disposable copy may update its lock after a manifest mutation.
         self.succeed("lock", &["generate-lockfile", "--offline", "--quiet"])?;
-        self.succeed("compile", &[
-            "check", "--workspace", "--all-targets", "--locked", "--offline", "--quiet",
-        ])
+        self.succeed(
+            "compile",
+            &[
+                "check",
+                "--workspace",
+                "--all-targets",
+                "--locked",
+                "--offline",
+                "--quiet",
+            ],
+        )
     }
 
     pub fn metadata(&self) -> TestResult<Value> {
-        let (code, output) = self.cargo("metadata", &[
-            "metadata", "--format-version", "1", "--no-deps", "--locked", "--offline", "--quiet",
-        ])?;
+        let (code, output) = self.cargo(
+            "metadata",
+            &[
+                "metadata",
+                "--format-version",
+                "1",
+                "--no-deps",
+                "--locked",
+                "--offline",
+                "--quiet",
+            ],
+        )?;
         if code != Some(0) {
             return Err(format!("cargo metadata failed:\n{output}").into());
         }
         // Never use resolve.nodes: it can omit inactive optional dependencies.
         let metadata: Value = serde_json::from_str(&output)?;
-        fs::write(self.logs.join("metadata.json"), serde_json::to_vec_pretty(&metadata)?)?;
+        fs::write(
+            self.logs.join("metadata.json"),
+            serde_json::to_vec_pretty(&metadata)?,
+        )?;
         Ok(metadata)
     }
 
@@ -117,7 +143,11 @@ impl Fixture {
 
     pub fn probe(&self, package: &str, version: &str) -> TestResult {
         // Outside the inspected workspace; does not introduce a Cargo cycle.
-        let path = self.workspace.parent().ok_or("Missing parent")?.join("probe");
+        let path = self
+            .workspace
+            .parent()
+            .ok_or("Missing parent")?
+            .join("probe");
         fs::create_dir_all(path.join("src"))?;
         fs::write(path.join("Cargo.toml"), format!(
             "[package]\nname = {package:?}\nversion = {version:?}\nedition = \"2021\"\npublish = false\n\n[workspace]\n"

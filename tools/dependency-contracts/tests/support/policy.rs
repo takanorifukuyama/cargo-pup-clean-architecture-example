@@ -23,6 +23,13 @@ pub struct Rule {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct DeclarationContext {
+    pub alias: Option<String>,
+    pub optional: bool,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Problem {
     InvalidMetadata(String),
     Coverage(String),
@@ -31,9 +38,7 @@ pub enum Problem {
         package: String,
         dependency: String,
         kind: Kind,
-        alias: Option<String>,
-        optional: bool,
-        target: Option<String>,
+        context: Box<DeclarationContext>,
     },
     WrongSource {
         package: String,
@@ -56,12 +61,17 @@ fn invalid(message: &str) -> Problem {
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Checked<&'a str> {
-    value.get(key).and_then(Value::as_str)
+    value
+        .get(key)
+        .and_then(Value::as_str)
         .ok_or_else(|| invalid(&format!("Missing/string field: {key}")))
 }
 
 fn array<'a>(value: &'a Value, key: &str) -> Checked<&'a [Value]> {
-    value.get(key).and_then(Value::as_array).map(Vec::as_slice)
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
         .ok_or_else(|| invalid(&format!("Missing/array field: {key}")))
 }
 
@@ -74,7 +84,9 @@ fn nullable_text(value: &Value) -> Checked<Option<&str>> {
 }
 
 fn required<'a>(value: &'a Value, key: &str) -> Checked<&'a Value> {
-    value.get(key).ok_or_else(|| invalid(&format!("Missing field: {key}")))
+    value
+        .get(key)
+        .ok_or_else(|| invalid(&format!("Missing field: {key}")))
 }
 
 // Package IDs are opaque: compare them verbatim, never parse or split them.
@@ -85,7 +97,9 @@ fn members(metadata: &Value) -> Checked<BTreeMap<&str, &Value>> {
     let ids = array(metadata, "workspace_members")?;
     let mut wanted = BTreeSet::new();
     for id in ids {
-        let id = id.as_str().ok_or_else(|| invalid("Non-string package ID"))?;
+        let id = id
+            .as_str()
+            .ok_or_else(|| invalid("Non-string package ID"))?;
         if !wanted.insert(id) {
             return Err(invalid("Duplicate workspace member ID"));
         }
@@ -124,20 +138,27 @@ pub fn coverage(metadata: &Value, rules: &[Rule]) -> Checked<()> {
             return Err(Problem::Coverage("Empty/duplicate rule name".into()));
         }
         if !packages.contains_key(rule.package) || !covered.insert(rule.package) {
-            return Err(Problem::Coverage(format!("Unknown/duplicate package: {}", rule.package)));
+            return Err(Problem::Coverage(format!(
+                "Unknown/duplicate package: {}",
+                rule.package
+            )));
         }
         for allowed in [rule.normal, rule.dev, rule.build] {
             let mut seen = BTreeSet::new();
             for dependency in allowed {
                 if !packages.contains_key(dependency) || !seen.insert(dependency) {
-                    return Err(Problem::Coverage(format!("Unknown/duplicate allowance: {dependency}")));
+                    return Err(Problem::Coverage(format!(
+                        "Unknown/duplicate allowance: {dependency}"
+                    )));
                 }
             }
         }
     }
     for name in packages.keys() {
         if !covered.contains(name) {
-            return Err(Problem::Coverage(format!("Unclassified workspace member: {name}")));
+            return Err(Problem::Coverage(format!(
+                "Unclassified workspace member: {name}"
+            )));
         }
     }
     Ok(())
@@ -145,7 +166,8 @@ pub fn coverage(metadata: &Value, rules: &[Rule]) -> Checked<()> {
 
 pub fn check_rule(metadata: &Value, rule: &Rule) -> Checked<()> {
     let packages = members(metadata)?;
-    let package = packages.get(rule.package)
+    let package = packages
+        .get(rule.package)
         .ok_or_else(|| Problem::Coverage(format!("Missing package: {}", rule.package)))?;
     for dependency in array(package, "dependencies")? {
         let name = text(dependency, "name")?;
@@ -157,7 +179,8 @@ pub fn check_rule(metadata: &Value, rule: &Rule) -> Checked<()> {
         };
         let alias = nullable_text(required(dependency, "rename")?)?;
         let target = nullable_text(required(dependency, "target")?)?;
-        let optional = required(dependency, "optional")?.as_bool()
+        let optional = required(dependency, "optional")?
+            .as_bool()
             .ok_or_else(|| invalid("optional must be boolean"))?;
         let allowed = match kind {
             Kind::Normal => rule.normal,
@@ -170,24 +193,30 @@ pub fn check_rule(metadata: &Value, rule: &Rule) -> Checked<()> {
                 package: rule.package.into(),
                 dependency: name.into(),
                 kind,
-                alias: alias.map(str::to_owned),
-                optional,
-                target: target.map(str::to_owned),
+                context: Box::new(DeclarationContext {
+                    alias: alias.map(str::to_owned),
+                    optional,
+                    target: target.map(str::to_owned),
+                }),
             });
         }
         // Allowances in this example identify WORKSPACE packages. Same name from
         // a registry, git or a different local path does not satisfy the contract.
-        let expected = packages.get(name)
+        let expected = packages
+            .get(name)
             .ok_or_else(|| Problem::Coverage(format!("Unknown allowance: {name}")))?;
-        let expected_dir = Path::new(text(expected, "manifest_path")?).parent()
+        let expected_dir = Path::new(text(expected, "manifest_path")?)
+            .parent()
             .ok_or_else(|| invalid("Manifest has no parent"))?;
         let source = nullable_text(required(dependency, "source")?)?;
         let path = nullable_text(dependency.get("path").unwrap_or(&Value::Null))?;
         let same_path = match path {
             Some(path) => {
-                let actual = Path::new(path).canonicalize()
+                let actual = Path::new(path)
+                    .canonicalize()
                     .map_err(|_| invalid("Dependency directory unavailable"))?;
-                let expected = expected_dir.canonicalize()
+                let expected = expected_dir
+                    .canonicalize()
                     .map_err(|_| invalid("Workspace directory unavailable"))?;
                 actual == expected
             }
