@@ -1,15 +1,17 @@
-//! Small, sample-local macro facade over the cargo-pup CLI, not a new analyzer.
-//! RON is generated in a fresh fixture; it is never a second source of truth.
+//! Sample-local facade over cargo-pup, with fail-closed coverage probes.
+//! Rules remain Rust declarations; RON and compiler workspaces are temporary.
 
+#[path = "../common/runtime.rs"]
+mod runtime;
+
+pub use runtime::TestResult;
+use runtime::{execute, Project};
 use std::error::Error;
-use std::fs::{self, File, OpenOptions};
+use std::fmt;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-pub type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+use std::path::{Component, Path};
+use std::process::Command;
 
 macro_rules! architecture_rules {
     ($($name:ident {
@@ -23,7 +25,6 @@ macro_rules! architecture_rules {
                 deny_imports: &[$(stringify!($denied)),+],
             }),+
         ];
-
         $(#[test]
         fn $name() -> $crate::support::TestResult {
             $crate::support::check(
@@ -57,8 +58,33 @@ macro_rules! architecture_violation {
     };
 }
 
+macro_rules! visibility_rules {
+    ($($name:ident {
+        struct_name: $structure:ident,
+        visibility: $visibility:ident,
+    })+) => {
+        const VISIBILITY_RULES: &[$crate::support::VisibilityRule] = &[
+            $($crate::support::VisibilityRule {
+                name: stringify!($name),
+                struct_name: stringify!($structure),
+                visibility: $crate::support::Visibility::$visibility,
+            }),+
+        ];
+        $(#[test]
+        fn $name() -> $crate::support::TestResult {
+            let rule = VISIBILITY_RULES.iter()
+                .find(|rule| rule.name == stringify!($name))
+                .ok_or("Missing visibility rule")?;
+            $crate::support::check_visibility(
+                stringify!($name), rule, None, $crate::support::Expectation::Pass,
+            )
+        })+
+    };
+}
+
 pub(crate) use architecture_rules;
 pub(crate) use architecture_violation;
+pub(crate) use visibility_rules;
 
 pub struct Rule {
     pub name: &'static str,
@@ -71,11 +97,58 @@ pub struct Edit {
     pub code: &'static str,
 }
 
+pub struct Replacement {
+    pub file: &'static str,
+    pub before: &'static str,
+    pub after: &'static str,
+}
+
+pub enum Visibility {
+    Private,
+    Public,
+    PubCrate,
+}
+
+pub struct VisibilityRule {
+    pub name: &'static str,
+    // cargo-pup 0.1.8 matches the SHORT struct name, not a resolved type path.
+    pub struct_name: &'static str,
+    pub visibility: Visibility,
+}
+
 #[derive(Clone, Copy)]
 pub enum Expectation {
     Pass,
     Denied,
     KnownGap,
+    MissingTarget,
+}
+
+#[derive(Debug)]
+struct MissingTarget(String);
+
+impl fmt::Display for MissingTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "No coverage evidence for {}: missing/cfg-disabled target or suppressed canary",
+            self.0
+        )
+    }
+}
+
+impl Error for MissingTarget {}
+
+#[derive(Clone, Copy)]
+enum Lint<'a> {
+    Imports(&'a Rule),
+    Visibility(&'a VisibilityRule),
+}
+
+enum Mutation {
+    Append(Edit),
+    Replace(Replacement),
+    CapLints,
 }
 
 pub fn find_rule<'a>(rules: &'a [Rule], name: &str) -> TestResult<&'a Rule> {
@@ -89,8 +162,6 @@ pub fn find_rule<'a>(rules: &'a [Rule], name: &str) -> TestResult<&'a Rule> {
     Ok(rule)
 }
 
-// Only simple ASCII paths are supported. Reject generic/raw/Unicode paths instead
-// of accidentally treating user input as a regular expression or RON syntax.
 fn normalized_path(path: &str) -> TestResult<String> {
     let path: String = path.chars().filter(|ch| !ch.is_whitespace()).collect();
     let valid = path.split("::").all(|segment| {
@@ -108,8 +179,6 @@ fn normalized_path(path: &str) -> TestResult<String> {
 
 fn import_pattern(path: &str) -> TestResult<String> {
     let path = normalized_path(path)?;
-    // Preserve the original policy's syntactic matching of crate/super imports.
-    // This deliberately does NOT claim resolved dependency-graph semantics.
     Ok(match path.strip_prefix("crate::") {
         Some(local) => format!("(^|::){local}(::|$)"),
         None => format!("^{path}(::|$)"),
@@ -128,12 +197,76 @@ fn configuration(rule: &Rule) -> TestResult<String> {
         .map(|path| import_pattern(path).map(|pattern| format!("{pattern:?}")))
         .collect::<TestResult<Vec<_>>>()?
         .join(", ");
-    // The validated path alphabet cannot inject regex metacharacters or quotes.
     Ok(format!(
         "(lints: [Module((name: {:?}, matches: Module({:?}), rules: [RestrictImports(allowed_only: None, denied: Some([{denied}]), severity: Error)]))])\n",
         rule.name,
         format!("^{module}(::|$)"),
     ))
+}
+
+impl Lint<'_> {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Imports(rule) => rule.name,
+            Self::Visibility(rule) => rule.name,
+        }
+    }
+
+    fn config(self, coverage: bool) -> TestResult<String> {
+        normalized_path(self.name())?;
+        let name = if coverage {
+            format!("coverage_{}", self.name())
+        } else {
+            self.name().to_owned()
+        };
+        match self {
+            Self::Imports(rule) => {
+                let actual = configuration(rule)?;
+                if !coverage {
+                    return Ok(actual);
+                }
+                let module = normalized_path(rule.module)?;
+                Ok(format!(
+                    "(lints: [Module((name: {name:?}, matches: Module({:?}), rules: [MustBeNamed(\"^$\", Error)]))])\n",
+                    format!("^{module}(::|$)"),
+                ))
+            }
+            Self::Visibility(rule) => {
+                let structure = normalized_path(rule.struct_name)?;
+                if structure.contains("::") {
+                    return Err("Struct selectors accept a short name, not a type path".into());
+                }
+                let requirement = if coverage {
+                    "MustBeNamed(\"^$\", Error)"
+                } else {
+                    match rule.visibility {
+                        Visibility::Private => "MustBePrivate(Error)",
+                        Visibility::Public => "MustBePublic(Error)",
+                        Visibility::PubCrate => "MustBePubCrate(Error)",
+                    }
+                };
+                Ok(format!(
+                    "(lints: [Struct((name: {name:?}, matches: Name({:?}), rules: [{requirement}]))])\n",
+                    format!("^{structure}$"),
+                ))
+            }
+        }
+    }
+
+    fn denial_tokens(self) -> Vec<String> {
+        match self {
+            Self::Imports(_) => vec!["Use of module".into(), "is denied".into()],
+            Self::Visibility(rule) => vec![
+                format!("Struct '{}'", rule.struct_name),
+                match rule.visibility {
+                    Visibility::Private => "must be private",
+                    Visibility::Public => "must be pub",
+                    Visibility::PubCrate => "must be pub(crate)",
+                }
+                .into(),
+            ],
+        }
+    }
 }
 
 fn setting<'a>(text: &'a str, key: &str) -> TestResult<&'a str> {
@@ -177,49 +310,48 @@ fn strip_ansi(text: &str) -> String {
     result
 }
 
-fn verify(expected: Expectation, rule: &str, code: Option<i32>, output: &str) -> TestResult {
+// Require the rule and its diagnostic in the SAME error, not a warning elsewhere.
+fn named_error(code: Option<i32>, output: &str, rule: &str, tokens: &[&str]) -> bool {
+    if !code.is_some_and(|value| value > 0)
+        || output.contains("internal compiler error")
+        || output.contains("panicked at")
+    {
+        return false;
+    }
     let output = strip_ansi(output);
+    let mut blocks = Vec::new();
+    let mut block = String::new();
+    for line in output.lines() {
+        if line.starts_with("error:")
+            || line.starts_with("error[")
+            || line.starts_with("warning:")
+            || line.starts_with("warning[")
+        {
+            blocks.push(std::mem::take(&mut block));
+        }
+        block.push_str(line);
+        block.push('\n');
+    }
+    blocks.push(block);
+    let note = format!("Applied by cargo-pup rule '{rule}'.");
+    let inline = format!("error: {rule}:");
+    blocks.iter().any(|block| {
+        (block.starts_with("error:") || block.starts_with("error["))
+            && (block.contains(&note) || block.starts_with(&inline))
+            && tokens.iter().all(|token| block.contains(token))
+    })
+}
+
+fn verify(expected: Expectation, rule: &str, code: Option<i32>, output: &str) -> TestResult {
     let valid = match expected {
         Expectation::Pass | Expectation::KnownGap => code == Some(0),
-        Expectation::Denied => {
-            code.is_some_and(|value| value > 0)
-                && [rule, "Use of module", "is denied"]
-                    .iter()
-                    .all(|token| output.contains(token))
-                && output.lines().any(|line| {
-                    let line = line.trim_start();
-                    line.starts_with("error:") || line.starts_with("error[")
-                })
-                && !output.contains("internal compiler error")
-                && !output.contains("panicked at")
-        }
+        Expectation::Denied => named_error(code, output, rule, &["Use of module", "is denied"]),
+        Expectation::MissingTarget => false,
     };
     if valid {
         Ok(())
     } else {
         Err(format!("Unexpected cargo-pup result for {rule}, exit={code:?}:\n{output}").into())
-    }
-}
-
-static TEMP_ID: AtomicU64 = AtomicU64::new(0);
-
-struct Project(PathBuf);
-
-impl Project {
-    fn new() -> TestResult<Self> {
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("pup-rust-{}-{time}-{id}", std::process::id()));
-        // create_dir fails if the path already exists: never adopt someone else's directory.
-        fs::create_dir(&path)?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -240,64 +372,51 @@ fn copy_directory(source: &Path, target: &Path) -> TestResult {
     Ok(())
 }
 
-// File-backed output avoids pipe deadlocks. Each command has a bounded runtime.
-fn execute(command: &mut Command, log: &Path) -> TestResult<(Option<i32>, String)> {
-    let file = File::create(log)?;
-    command
-        .stdout(Stdio::from(file.try_clone()?))
-        .stderr(Stdio::from(file));
-    command
-        .env("CARGO_TERM_COLOR", "never")
-        .env("NO_COLOR", "1");
-    // Do not inherit an outer cargo test's target directory / rustc wrapper.
-    for name in [
-        "CARGO_TARGET_DIR",
-        "CARGO_BUILD_TARGET_DIR",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-    ] {
-        command.env_remove(name);
+fn replace_once(text: &str, before: &str, after: &str) -> TestResult<String> {
+    if before.is_empty() || text.matches(before).count() != 1 {
+        return Err("A mutation must replace exactly one occurrence".into());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command.spawn()?;
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    Ok(text.replacen(before, after, 1))
+}
+
+fn mutate(project: &Path, mutation: Mutation) -> TestResult {
+    let (file, before, code) = match mutation {
+        Mutation::Append(edit) => (edit.file, None, edit.code),
+        Mutation::Replace(edit) => (edit.file, Some(edit.before), edit.after),
+        Mutation::CapLints => {
+            // A deliberate negative control, confined to this temporary fixture.
+            fs::create_dir(project.join(".cargo"))?;
+            fs::write(
+                project.join(".cargo/config.toml"),
+                "[build]\nrustflags = [\"--cap-lints=allow\"]\n",
+            )?;
+            return Ok(());
         }
-        if started.elapsed() > Duration::from_secs(180) {
-            #[cfg(unix)]
-            {
-                // Kill cargo and its rustc/pup descendants, not only the parent.
-                let _ = Command::new("kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
-                    .status();
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("Command timed out: {command:?}; log: {}", log.display()).into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
     };
-    let output = String::from_utf8_lossy(&fs::read(log)?).into_owned();
-    writeln!(
-        OpenOptions::new().append(true).open(log)?,
-        "\nCOMMAND: {command:?}\nEXIT: {:?}",
-        status.code()
-    )?;
-    Ok((status.code(), output))
+    let path = Path::new(file);
+    if !path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
+        || !path.starts_with("src")
+    {
+        return Err(format!("Mutation must name a relative file under src/: {file}").into());
+    }
+    let path = project.join(path);
+    if let Some(before) = before {
+        let updated = replace_once(&fs::read_to_string(&path)?, before, code)?;
+        fs::write(path, updated)?;
+    } else {
+        writeln!(OpenOptions::new().append(true).open(path)?, "\n{code}")?;
+    }
+    Ok(())
 }
 
 fn run(
     root: &Path,
     logs: &Path,
     name: &str,
-    rule: &Rule,
-    edit: Option<Edit>,
+    lint: Lint<'_>,
+    mutation: Option<Mutation>,
     expected: Expectation,
 ) -> TestResult {
     let pins = include_str!("../../pup-toolchain.toml");
@@ -330,27 +449,10 @@ fn run(
     for directory in ["src", "tests"] {
         copy_directory(&root.join(directory), &project.0.join(directory))?;
     }
-    let config = configuration(rule)?;
-    fs::write(project.0.join("pup.ron"), &config)?;
-    fs::write(logs.join(format!("{name}.pup.ron")), config)?;
-    if let Some(edit) = edit {
-        let path = Path::new(edit.file);
-        if !path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-            || !path.starts_with("src")
-        {
-            return Err(format!(
-                "Mutation must name a relative file under src/: {}",
-                edit.file
-            )
-            .into());
-        }
-        let mut file = OpenOptions::new().append(true).open(project.0.join(path))?;
-        writeln!(file, "\n{}", edit.code)?;
+    if let Some(mutation) = mutation {
+        mutate(&project.0, mutation)?;
     }
-    // Compiling all default-feature targets must succeed BEFORE the lint runs.
-    // We never invoke cargo test recursively. The feature-gated runner is not compiled here.
+    // Compile all default-feature targets first; never recursively execute tests.
     let (code, output) = execute(
         Command::new("rustup")
             .args([
@@ -376,27 +478,94 @@ fn run(
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    let (code, output) = execute(
-        Command::new(&pup)
-            .args(["check", "--locked", "--all-targets"])
-            .env("PATH", std::env::join_paths(paths)?)
-            .current_dir(&project.0),
-        &logs.join(format!("{name}.pup.log")),
-    )?;
-    verify(expected, rule.name, code, &output)
+    let search_path = std::env::join_paths(paths)?;
+    // Same selector, same source and same --lib scope. ^$ cannot match a Rust name.
+    // No .pup reuse: cargo-pup does not reliably invalidate on RON changes alone.
+    for coverage in [true, false] {
+        let phase = if coverage { "coverage" } else { "pup" };
+        let config = lint.config(coverage)?;
+        fs::write(project.0.join("pup.ron"), &config)?;
+        fs::write(logs.join(format!("{name}.{phase}.ron")), config)?;
+        let cache = project.0.join(".pup");
+        if cache.exists() {
+            fs::remove_dir_all(cache)?;
+        }
+        let (code, output) = execute(
+            Command::new(&pup)
+                .args(["check", "--locked", "--lib"])
+                .env("PATH", &search_path)
+                .current_dir(&project.0),
+            &logs.join(format!("{name}.{phase}.log")),
+        )?;
+        if coverage {
+            if code == Some(0) {
+                return Err(Box::new(MissingTarget(lint.name().to_owned())));
+            }
+            let subject = match lint {
+                Lint::Imports(_) => "Module must match",
+                Lint::Visibility(_) => "Struct must match",
+            };
+            if !named_error(
+                code,
+                &output,
+                &format!("coverage_{}", lint.name()),
+                &[subject, "^$"],
+            ) {
+                return Err(
+                    format!("Coverage probe failed for an unexpected reason:\n{output}").into(),
+                );
+            }
+        } else {
+            match lint {
+                Lint::Imports(rule) => verify(expected, rule.name, code, &output)?,
+                Lint::Visibility(_) => {
+                    let tokens = lint.denial_tokens();
+                    let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
+                    let valid = match expected {
+                        Expectation::Pass => code == Some(0),
+                        Expectation::Denied => named_error(code, &output, lint.name(), &tokens),
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(format!(
+                            "Unexpected visibility result for {}:\n{output}",
+                            lint.name()
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
-pub fn check(name: &str, rule: &Rule, edit: Option<Edit>, expected: Expectation) -> TestResult {
+fn check_lint(
+    name: &str,
+    lint: Lint<'_>,
+    mutation: Option<Mutation>,
+    expected: Expectation,
+) -> TestResult {
+    normalized_path(name)?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let logs = root.join(".test-artifacts/architecture");
     fs::create_dir_all(&logs)?;
-    let result = run(root, &logs, name, rule, edit, expected);
+    let result = run(root, &logs, name, lint, mutation, expected);
+    let result = if matches!(expected, Expectation::MissingTarget) {
+        match result {
+            Err(error) if error.downcast_ref::<MissingTarget>().is_some() => Ok(()),
+            Err(error) => Err(error),
+            Ok(()) => Err("An empty selector was unexpectedly accepted".into()),
+        }
+    } else {
+        result
+    };
     let outcome = match (&result, expected) {
         (Err(_), _) => "FAIL",
         (Ok(()), Expectation::KnownGap) => "KNOWN GAP confirmed (not protection)",
+        (Ok(()), Expectation::MissingTarget) => "PASS (missing target rejected)",
         (Ok(()), _) => "PASS",
     };
-    // One file per case: libtest's parallel execution cannot interleave summary writes.
     fs::write(
         logs.join(format!("{name}.result.md")),
         format!("| `{name}` | {outcome} |\n"),
@@ -405,6 +574,42 @@ pub fn check(name: &str, rule: &Rule, edit: Option<Edit>, expected: Expectation)
     result
 }
 
+pub fn check(name: &str, rule: &Rule, edit: Option<Edit>, expected: Expectation) -> TestResult {
+    check_lint(
+        name,
+        Lint::Imports(rule),
+        edit.map(Mutation::Append),
+        expected,
+    )
+}
+
+pub fn check_visibility(
+    name: &str,
+    rule: &VisibilityRule,
+    edit: Option<Replacement>,
+    expected: Expectation,
+) -> TestResult {
+    check_lint(
+        name,
+        Lint::Visibility(rule),
+        edit.map(Mutation::Replace),
+        expected,
+    )
+}
+
+pub fn check_suppressed_coverage(name: &str, rule: &Rule) -> TestResult {
+    check_lint(
+        name,
+        Lint::Imports(rule),
+        Some(Mutation::CapLints),
+        Expectation::MissingTarget,
+    )
+}
+
 #[cfg(test)]
 #[path = "support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "guard_tests.rs"]
+mod guard_tests;
