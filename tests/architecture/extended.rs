@@ -86,7 +86,7 @@ fn suppressing_the_canary_is_rejected() -> TestResult {
         },
         Some(Edit {
             file: "src/lib.rs",
-            code: "#[allow(unknown_lints, module_must_be_named_lint_deny)] pub mod suppressed_scope {}",
+            code: "#[allow(unknown_lints, module_must_be_named)] pub mod suppressed_scope {}",
         }),
         Expectation::MissingTarget,
     )

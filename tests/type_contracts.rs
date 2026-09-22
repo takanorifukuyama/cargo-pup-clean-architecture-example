@@ -106,7 +106,7 @@ macro_rules! type_contract_violation {
     ($name:ident {
         declarations: { $($declaration:tt)* }
         type: $ty:ty,
-        requires: $bound:path,
+        requires: [$($bound:path),+ $(,)?],
         diagnostic: $diagnostic:literal,
     }) => {
         #[test]
@@ -115,7 +115,7 @@ macro_rules! type_contract_violation {
                 stringify!($name),
                 stringify!($($declaration)*),
                 stringify!(type_contracts! {
-                    contract_probe { type: $ty, implements: [$bound], }
+                    contract_probe { type: $ty, implements: [$($bound),+], }
                 }),
                 Some($diagnostic),
             )
@@ -123,29 +123,38 @@ macro_rules! type_contract_violation {
     };
 }
 
+// Exercise all three bound positions, not just isolated single-bound contracts.
 type_contract_violation! {
     missing_repository_implementation_is_rejected {
         declarations: { trait TaskRepository {} struct Repository; }
         type: Repository,
-        requires: TaskRepository,
+        requires: [TaskRepository, Send, Sync],
         diagnostic: "TaskRepository",
     }
 }
 
 type_contract_violation! {
     non_send_type_is_rejected {
-        declarations: { struct LocalRepository(std::rc::Rc<u8>); }
+        declarations: {
+            trait TaskRepository {}
+            struct LocalRepository(std::rc::Rc<u8>);
+            impl TaskRepository for LocalRepository {}
+        }
         type: LocalRepository,
-        requires: Send,
+        requires: [TaskRepository, Send, Sync],
         diagnostic: "Send",
     }
 }
 
 type_contract_violation! {
     non_sync_type_is_rejected {
-        declarations: { struct MutableRepository(std::cell::Cell<u8>); }
+        declarations: {
+            trait TaskRepository {}
+            struct MutableRepository(std::cell::Cell<u8>);
+            impl TaskRepository for MutableRepository {}
+        }
         type: MutableRepository,
-        requires: Sync,
+        requires: [TaskRepository, Send, Sync],
         diagnostic: "Sync",
     }
 }
