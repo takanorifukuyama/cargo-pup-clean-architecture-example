@@ -1,0 +1,25 @@
+[package]
+name = "layer-contracts-example"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[features]
+compiler = []
+integration = []
+
+[lib]
+name = "layer_contracts"
+
+[[bin]]
+name = "layer-driver"
+path = "src/driver.rs"
+required-features = ["compiler"]
+
+[[test]]
+name = "resolved"
+path = "tests/resolved.rs"
+required-features = ["integration"]
