@@ -44,7 +44,10 @@ fn denied(fixture: &Fixture, from: &str, to: &str, kind: Kind) -> TestResult {
     fixture.compile_mutation()?;
     let metadata = fixture.metadata()?;
     coverage(&metadata, RULES)?;
-    let expected = RULES.iter().find(|rule| rule.package == from).ok_or("Missing rule")?;
+    let expected = RULES
+        .iter()
+        .find(|rule| rule.package == from)
+        .ok_or("Missing rule")?;
     let problem = check_all(&metadata, RULES).expect_err("Forbidden dependency was accepted");
     assert!(
         matches!(
@@ -318,7 +321,10 @@ fn remote_source_cannot_impersonate_a_workspace_package() -> TestResult {
             .find(|p| p["name"] == "task-application")
             .ok_or("Missing application")?;
         app["dependencies"][0]["source"] = json!(source);
-        assert!(matches!(check_all(&metadata, RULES), Err(Problem::WrongSource { .. })));
+        assert!(matches!(
+            check_all(&metadata, RULES),
+            Err(Problem::WrongSource { .. })
+        ));
     }
     fixture.pass("Non-local source IDs cannot satisfy local workspace allowances")
 }
