@@ -31,7 +31,8 @@ jobs:
       - name: Behavior, CLI, type contracts and compile-fail controls
         run: cargo test --locked --all-targets
       - name: Architecture harness and coverage unit tests (no cargo-pup required)
-        run: cargo test --locked --features architecture-tests --test architecture support::
+        run: |
+          cargo test --locked --features architecture-tests --test architecture support::
       - name: Preserve native compiler diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
