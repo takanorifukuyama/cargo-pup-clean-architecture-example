@@ -1,0 +1,59 @@
+name: Resolved layer contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formatting:
+    name: Resolved layer formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Formatting
+        run: cargo fmt --manifest-path tools/layer-contracts/Cargo.toml --all -- --check
+
+  contracts:
+    name: Compiler-resolved layer contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned compiler
+        shell: bash
+        run: |
+          toolchain=$(cat tools/layer-contracts/toolchain.txt)
+          rustup toolchain install "$toolchain" --profile minimal --component rustc-dev --component llvm-tools-preview
+      - name: Build compiler collector
+        shell: bash
+        run: |
+          toolchain=$(cat tools/layer-contracts/toolchain.txt)
+          cargo +"$toolchain" build --manifest-path tools/layer-contracts/Cargo.toml --locked --features compiler --bin layer-driver
+      - name: Stable policy unit tests
+        run: cargo +stable test --manifest-path tools/layer-contracts/Cargo.toml --locked
+      - name: Real compiler controls and app verification
+        run: cargo +stable test --manifest-path tools/layer-contracts/Cargo.toml --locked --features integration --test resolved -- --nocapture
+      - name: Preserve graphs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: resolved-layer-graphs
+          path: .test-artifacts/resolved-layers/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
